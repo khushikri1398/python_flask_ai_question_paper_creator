@@ -21,19 +21,28 @@ def index():
         textbooks = []
     return render_template('index.html', textbooks=textbooks)
 
+
 @app.route('/select', methods=['POST'])
 def select():
     board = request.form.get("board")
     class_name = request.form.get("class")
-    subject = request.form.get("subject")
+    subjects = request.form.getlist("subject")  # Changed to handle multiple subjects
 
-    print(f"Received Board: {board}, Class: {class_name}, Subject: {subject}")
+    print(f"Received Board: {board}, Class: {class_name}, Subjects: {subjects}")
 
     try:
         response = requests.get(TEXTBOOKS_API)
         response.raise_for_status()
         textbooks = response.json().get('data', {}).get('getBooks', [])
+    except requests.RequestException as e:
+        print(f"Error fetching textbooks: {e}")
+        textbooks = []
 
+    all_chapters = []
+    all_topics = []
+    all_subtopics = []
+
+    for subject in subjects:
         matching_book = next(
             (book for book in textbooks if
              book.get('board') == board and
@@ -43,34 +52,34 @@ def select():
         )
 
         if not matching_book:
-            print("No matching textbook found for the given inputs.")
-            return render_template('select.html', board=board, class_name=class_name, subject=subject,
-                                   chapters=[], topics=[], subtopics=[])
+            print(f"No matching textbook found for subject: {subject}")
+            continue
 
-        book_id = matching_book.get("id") 
-        print(f"Matched book ID (subject ID): {book_id}")
+        book_id = matching_book.get("id")
+        print(f"Matched book ID for {subject}: {book_id}")
 
-        page_attr_url = f"https://staticapis.pragament.com/textbooks/page_attributes/{book_id}.json"
-        response = requests.get(page_attr_url)
-        response.raise_for_status()
-        topics_data = response.json()
-    except requests.RequestException as e:
-        print(f"Error fetching page attributes: {e}")
-        topics_data = []
+        try:
+            page_attr_url = f"https://staticapis.pragament.com/textbooks/page_attributes/{book_id}.json"
+            response = requests.get(page_attr_url)
+            response.raise_for_status()
+            topics_data = response.json()
+        except requests.RequestException as e:
+            print(f"Error fetching page attributes for {subject}: {e}")
+            continue
 
-    chapters = [item for item in topics_data if item.get('type') == 'chapter']
-    topics = [item for item in topics_data if item.get('type') == 'topic']
-    subtopics = [item for item in topics_data if item.get('type') == 'subtopic']
+        all_chapters.extend([item for item in topics_data if item.get('type') == 'chapter'])
+        all_topics.extend([item for item in topics_data if item.get('type') == 'topic'])
+        all_subtopics.extend([item for item in topics_data if item.get('type') == 'subtopic'])
 
-    return render_template('select.html', board=board, class_name=class_name, subject=subject,
-                           chapters=chapters, topics=topics, subtopics=subtopics)
+    return render_template('select.html', board=board, class_name=class_name, subjects=subjects,
+                           chapters=all_chapters, topics=all_topics, subtopics=all_subtopics)
 
 
 @app.route('/generate', methods=['POST'])
 def generate():
     board = request.form.get("board")
     class_name = request.form.get("class")
-    subject = request.form.get("subject")
+    subjects = request.form.getlist("subject")
     chapters = request.form.getlist("chapters")
     topics = request.form.getlist("topics")
     subtopics = request.form.getlist("subtopics")
@@ -82,7 +91,7 @@ def generate():
         "task": "Generate multiple-choice questions",
         "board": board if board else "Unknown",
         "class": class_name if class_name else "Unknown",
-        "subject": subject if subject else "Unknown",
+        "subject": subjects if subjects else ["Unknown"],
         "chapters": chapters,
         "topics": topics,
         "subtopics": subtopics,
@@ -92,27 +101,26 @@ def generate():
     }
 
     system_prompt = (
-    "You are an AI that only responds with valid JSON."
-    "Do not include any explanations or natural language text. "
-    "Just return a JSON object with the following format:\n"
-    "{\n"
-    '  "board": "CBSE",\n'
-    '  "class": "10",\n'
-    '  "subject": "Mathematics",\n'
-    '  "questions": [\n'
-    "    {\n"
-    '      "question": "Sample question?",\n'
-    '      "options": ["Option A", "Option B", "Option C", "Option D"],\n'
-    '      "correct_answer": "Option A"\n'
-    "    }\n"
-    "  ]\n"
-    "}\n"
-    "Generate exactly {n} multiple-choice questions. "
-    "Ensure each has 4 options and 1 correct answer. "
-    "Base the questions on the provided subject, class, board, chapters, topics, and subtopics. "
-    "Respond only with JSON.".replace("{n}", str(prompt_data['total_questions']))
+        "You are an AI that only responds with valid JSON. "
+        "Do not include any explanations or natural language text. "
+        "Just return a JSON object with the following format:\n"
+        "{\n"
+        '  "board": "CBSE",\n'
+        '  "class": "10",\n'
+        '  "subject": ["Mathematics", "Science"],\n'
+        '  "questions": [\n'
+        "    {\n"
+        '      "question": "Sample question?",\n'
+        '      "options": ["Option A", "Option B", "Option C", "Option D"],\n'
+        '      "correct_answer": "Option A"\n'
+        "    }\n"
+        "  ]\n"
+        "}\n"
+        f"Generate exactly {prompt_data['total_questions']} multiple-choice questions. "
+        "Ensure each has 4 options and 1 correct answer. "
+        "Base the questions on the provided board, class, subjects (multiple allowed), chapters, topics, and subtopics. "
+        "Respond only with JSON."
     )
-
 
     ollama_prompt = f"{system_prompt}\n{json.dumps(prompt_data, indent=4)}"
 
@@ -124,7 +132,7 @@ def generate():
             input=ollama_prompt,
             capture_output=True,
             text=True,
-            timeout=1600
+            timeout=1000000
         )
 
         print(f"Ollama raw output:\n{result.stdout}")
@@ -150,16 +158,15 @@ def generate():
         print(f"Error generating JSON with Ollama: {e}")
         paper_json = {}
 
-    # Save JSON to file
     json_path = "paper.json"
     with open(json_path, "w") as f:
         json.dump(paper_json, f)
 
-    # Generate PDF
     pdf_path = "Question.pdf"
     generate_pdf(paper_json, pdf_path)
 
     return render_template('result.html', paper_json=paper_json, pdf_code="PDF generated successfully.")
+
 
 
 def generate_pdf(data, output_pdf):
@@ -167,12 +174,15 @@ def generate_pdf(data, output_pdf):
     pdf.add_page()
     
     # Add Unicode font
-    font_path = "fonts\DejaVuSans.ttf"
+    font_path = "fonts/DejaVuSans.ttf" 
     pdf.add_font('DejaVu', '', font_path, uni=True)
     pdf.set_font("DejaVu", size=12)
 
     pdf.cell(200, 10, txt="Generated Question Paper", ln=1, align='C')
-    pdf.cell(200, 10, txt=f"Board: {data.get('board', 'N/A')}, Class: {data.get('class', 'N/A')}, Subject: {data.get('subject', 'N/A')}", ln=2, align='C')
+
+    subjects = data.get('subject', [])
+    subjects_str = ", ".join(subjects) if isinstance(subjects, list) else subjects
+    pdf.cell(200, 10, txt=f"Board: {data.get('board', 'N/A')}, Class: {data.get('class', 'N/A')}, Subject: {subjects_str}", ln=2, align='C')
     pdf.ln(10)
 
     questions = data.get("questions", [])
@@ -192,7 +202,6 @@ def generate_pdf(data, output_pdf):
 
     pdf.output(output_pdf)
     print(f"PDF successfully generated: {output_pdf}")
-
 
 @app.route('/download_pdf')
 def download_pdf():
