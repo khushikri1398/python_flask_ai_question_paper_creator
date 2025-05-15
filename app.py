@@ -174,7 +174,7 @@ def generate_pdf(data, output_pdf):
     pdf.add_page()
     
     # Add Unicode font
-    font_path = "fonts/DejaVuSans.ttf" 
+    font_path = os.path.join("fonts", 'DejaVuSans.ttf')
     pdf.add_font('DejaVu', '', font_path, uni=True)
     pdf.set_font("DejaVu", size=12)
 
