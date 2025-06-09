@@ -46,36 +46,89 @@ class OMRGenerator(FPDF):
             self.cell(0, 4, line, 0, 2)
 
     def add_student_info_fields(self):
-        self.set_font("Helvetica", "", 8)
-        self.set_xy(95, 55)
-        info_fields = [
-            ("Student Name", 50),
-            ("Exam Name", 30),
-            ("Class (6,7,8,9)", 20),
-            ("Section", 10),
-            ("Date", 20)
-        ]
-        # Admission number section label
-        self.set_xy(10, 55)
-        self.cell(30, 6, "Admission number", 1, 1, 'C')
-        # Student info header row
-        x = 45
-        y = 55
-        self.set_xy(x, y)
-        for label, width in info_fields:
-            self.cell(width, 6, label, 1, 0, 'C')
-        # Empty info field row
-        self.ln(6)
-        self.set_x(x)
-        for _, width in info_fields:
-            self.cell(width, 6, "", 1, 0)
-        # Admission number section with empty boxes
-        x = 10
-        y = 61
-        cols = 5
-        self.set_xy(x, y)
+        # Admission number block parameters
+        block_x = 10
+        block_y = 55
+        cols = 8  # For 8-digit admission number
+        rows = 10  # Digits 0-9
+        col_width = 7
+        row_height = 7
+        bubble_dia = 4.5
+
+        # Draw "Admission Number" label above the block
+        self.set_font("Helvetica", "B", 10)
+        self.set_xy(block_x, block_y)
+        self.cell(col_width * (cols + 1), 8, "Admission Number", 0, 2, 'C')
+
+        # Draw column headers (D1-D8)
+        self.set_font("Helvetica", "", 7)
+        self.set_xy(block_x + col_width, block_y + 8)
         for col in range(cols):
-            self.cell(6, 8, "", 1, 0, 'C')
+            self.cell(col_width, row_height, f"D{col+1}", 0, 0, 'C')
+        self.ln(row_height)
+
+        # Draw digit rows and OMR bubbles
+        for row in range(rows):
+            self.set_xy(block_x, block_y + 8 + row_height * (row + 1))
+            self.cell(col_width, row_height, str(row), 0, 0, 'C')
+            for col in range(cols):
+                # Bubble center
+                cx = block_x + col_width * (col + 1) + col_width / 2
+                cy = block_y + 8 + row_height * (row + 1) + row_height / 2
+                # Draw space for bubble
+                self.cell(col_width, row_height, "", 0, 0)
+                # Draw bubble (centered)
+                self.ellipse(cx - bubble_dia/2, cy - bubble_dia/2, bubble_dia, bubble_dia)
+
+        # Draw outer border for the block
+        self.set_draw_color(0, 0, 0)
+        self.rect(block_x, block_y + 8, col_width * (cols + 1), row_height * (rows + 1))
+
+        # Draw vertical lines for columns
+        for col in range(cols + 1):
+            x = block_x + col_width * col
+            y1 = block_y + 8
+            y2 = block_y + 8 + row_height * (rows + 1)
+            self.line(x, y1, x, y2)
+
+        # Draw horizontal lines for rows
+        for row in range(rows + 2):
+            y = block_y + 8 + row_height * row
+            x1 = block_x
+            x2 = block_x + col_width * (cols + 1)
+            self.line(x1, y, x2, y)
+
+        # Student info fields (to the right of admission number block)
+        info_x = block_x + col_width * (cols + 1) + 10
+        info_y = block_y
+
+        # Adjusted widths to leave a right margin (total width now 110mm instead of 130mm)
+        name_width = 110
+        left_width = 60
+        right_width = 50
+
+        # Row 1: Student Name (full width)
+        self.set_xy(info_x, info_y)
+        self.set_font("Helvetica", "", 8)
+        self.cell(name_width, 8, "Student Name", 1, 2, 'C')
+        self.set_x(info_x)
+        self.cell(name_width, 8, "", 1, 2)
+
+        # Row 2: Exam Name (left), Class (right)
+        self.set_x(info_x)
+        self.cell(left_width, 8, "Exam Name", 1, 0, 'C')
+        self.cell(right_width, 8, "Class (6,7,8,9)", 1, 2, 'C')
+        self.set_x(info_x)
+        self.cell(left_width, 8, "", 1, 0)
+        self.cell(right_width, 8, "", 1, 2)
+
+        # Row 3: Section (left), Date (right)
+        self.set_x(info_x)
+        self.cell(left_width, 8, "Section", 1, 0, 'C')
+        self.cell(right_width, 8, "Date", 1, 2, 'C')
+        self.set_x(info_x)
+        self.cell(left_width, 8, "", 1, 0)
+        self.cell(right_width, 8, "", 1, 2)
 
     def add_signature_fields(self):
         self.set_y(self.page_height - 25)
@@ -85,17 +138,15 @@ class OMRGenerator(FPDF):
 
     def add_question_bubbles(self):
         x_start = 20
-        y_start_first = 125  # after student info
+        y_start_first = 145  # after admission number grid
         y_start_others = 40  # higher up on subsequent pages
         total_width = 170
         col_width = total_width / len(self.subjects)
         row_height = 6
 
-        # Find max questions in any subject
         max_questions = max(self.subject_questions)
         question_indices = [0] * len(self.subjects)
         page = 1
-        current_row = 0
         finished = False
 
         while not finished:
@@ -124,7 +175,6 @@ class OMRGenerator(FPDF):
             else:
                 max_rows = int((self.page_height - (y_start + 12) - 30) // row_height)
 
-            rows_drawn = 0
             for row in range(max_rows):
                 any_drawn = False
                 for section in range(len(self.subjects)):
@@ -141,7 +191,6 @@ class OMRGenerator(FPDF):
                             self.ellipse(bx, by, self.bubble_diameter, self.bubble_diameter)
                         question_indices[section] += 1
                         any_drawn = True
-                rows_drawn += 1
                 if all(qi >= sq for qi, sq in zip(question_indices, self.subject_questions)):
                     finished = True
                     break
