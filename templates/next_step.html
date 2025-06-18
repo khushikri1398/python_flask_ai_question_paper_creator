@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Next Step</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 flex justify-center items-center min-h-screen">
+    <div class="bg-white p-8 rounded shadow-md text-center">
+        <h2 class="text-xl font-bold text-gray-800 mb-4">Prerequisite Topics PDF Generated</h2>
+        <a href="{{ url_for('static', filename=prereq_pdf) }}" class="text-blue-600 underline block mb-4" download>
+            Download Prerequisite PDF
+        </a>
+        <form method="get" action="{{ url_for('generate_questions') }}">
+            <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded">
+                Next: Generate Questions
+            </button>
+        </form>
+    </div>
+</body>
+</html>
