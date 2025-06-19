@@ -2,7 +2,6 @@
 
 An intelligent Flask application that automates MCQ paper creation and OMR sheet generation. Leverages LLMs (via Ollama and LLaMA 3) to generate prerequisite knowledge and MCQs based on selected curriculum data.
 
----
 
 ## 🚀 Features
 
