@@ -82,12 +82,6 @@ Visit the web app at:
  http://127.0.0.1:5000
 ```
 
----
-
-## 📸 Screenshots
-
-> Make sure the following images exist in a `screenshots/` folder:
-
 
 ## 📁 Folder Structure
 
