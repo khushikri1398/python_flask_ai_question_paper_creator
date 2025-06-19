@@ -1,0 +1,212 @@
+{
+    "pageDimensions": [
+        2481,
+        3508
+    ],
+    "bubbleDimensions": [
+        30,
+        42
+    ],
+    "customLabels": {
+        "AdmissionNo": [
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6",
+            "7",
+            "8"
+        ]
+    },
+    "fieldBlocks": {
+        "AdmissionBlock": {
+            "fieldType": "QTYPE_INT",
+            "origin": [
+                7,
+                703
+            ],
+            "fieldLabels": [
+                "1",
+                "2",
+                "3",
+                "4",
+                "5",
+                "6",
+                "7",
+                "8"
+            ],
+            "bubblesGap": 93,
+            "labelsGap": 103
+        },
+        "Math1_Block": {
+            "fieldType": "QTYPE_MCQ4",
+            "origin": [
+                172,
+                1858
+            ],
+            "fieldLabels": [
+                "Q001",
+                "Q002",
+                "Q003",
+                "Q004",
+                "Q005",
+                "Q006",
+                "Q007",
+                "Q008",
+                "Q009",
+                "Q010"
+            ],
+            "bubblesGap": 88,
+            "labelsGap": 80
+        },
+        "Math2_Block": {
+            "fieldType": "QTYPE_MCQ4",
+            "origin": [
+                659,
+                1858
+            ],
+            "fieldLabels": [
+                "Q011",
+                "Q012",
+                "Q013",
+                "Q014",
+                "Q015",
+                "Q016",
+                "Q017",
+                "Q018",
+                "Q019",
+                "Q020"
+            ],
+            "bubblesGap": 88,
+            "labelsGap": 80
+        },
+        "Physics_Block": {
+            "fieldType": "QTYPE_MCQ4",
+            "origin": [
+                1146,
+                1858
+            ],
+            "fieldLabels": [
+                "Q021",
+                "Q022",
+                "Q023",
+                "Q024",
+                "Q025",
+                "Q026",
+                "Q027",
+                "Q028",
+                "Q029",
+                "Q030"
+            ],
+            "bubblesGap": 88,
+            "labelsGap": 80
+        },
+        "Chemistry_Block": {
+            "fieldType": "QTYPE_MCQ4",
+            "origin": [
+                1633,
+                1858
+            ],
+            "fieldLabels": [
+                "Q031",
+                "Q032",
+                "Q033",
+                "Q034",
+                "Q035",
+                "Q036",
+                "Q037",
+                "Q038",
+                "Q039",
+                "Q040"
+            ],
+            "bubblesGap": 88,
+            "labelsGap": 80
+        },
+        "MAT_Block": {
+            "fieldType": "QTYPE_MCQ4",
+            "origin": [
+                2120,
+                1858
+            ],
+            "fieldLabels": [
+                "Q041",
+                "Q042",
+                "Q043",
+                "Q044",
+                "Q045",
+                "Q046",
+                "Q047",
+                "Q048",
+                "Q049",
+                "Q050"
+            ],
+            "bubblesGap": 88,
+            "labelsGap": 80
+        }
+    },
+    "preProcessors": [
+        {
+            "name": "CropOnMarkers",
+            "options": {
+                "relativePath": "marker.png",
+                "sheetToMarkerWidthRatio": 15.51,
+                "apply_erode_subtract": false
+            }
+        }
+    ],
+    "outputColumns": [
+        "AdmissionNo",
+        "Q001",
+        "Q002",
+        "Q003",
+        "Q004",
+        "Q005",
+        "Q006",
+        "Q007",
+        "Q008",
+        "Q009",
+        "Q010",
+        "Q011",
+        "Q012",
+        "Q013",
+        "Q014",
+        "Q015",
+        "Q016",
+        "Q017",
+        "Q018",
+        "Q019",
+        "Q020",
+        "Q021",
+        "Q022",
+        "Q023",
+        "Q024",
+        "Q025",
+        "Q026",
+        "Q027",
+        "Q028",
+        "Q029",
+        "Q030",
+        "Q031",
+        "Q032",
+        "Q033",
+        "Q034",
+        "Q035",
+        "Q036",
+        "Q037",
+        "Q038",
+        "Q039",
+        "Q040",
+        "Q041",
+        "Q042",
+        "Q043",
+        "Q044",
+        "Q045",
+        "Q046",
+        "Q047",
+        "Q048",
+        "Q049",
+        "Q050"
+    ],
+    "emptyValue": ""
+}
