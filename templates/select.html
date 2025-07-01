@@ -1,122 +1,202 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Select Topics</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-</head>
-<body class="bg-gray-100 min-h-screen flex items-center justify-center p-6">
-  <div class="w-full max-w-xl bg-white rounded-lg shadow-md p-8">
-    <h1 class="text-2xl font-bold mb-6 text-center text-gray-800">
-      Select Topics for {{ subject }}
-    </h1>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Select Topics</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+  </head>
+  <body class="bg-gray-100 min-h-screen p-6">
+    <div class="max-w-5xl mx-auto bg-white rounded-lg shadow-md p-8">
+      <h1 class="text-2xl font-bold mb-6 text-center text-gray-800">
+        Select Topics for Question Generation
+      </h1>
 
-    <form id="topicForm" method="post" action="{{ url_for('generate') }}" class="space-y-6">
-      <input type="hidden" name="board" value="{{ board }}" />
-      <input type="hidden" name="class" value="{{ class_name }}" />
-      <input type="hidden" name="subject" value="{{ subject }}" />
-      <input type="hidden" name="step" value="topics" id="stepInput"/>
+      <form
+        id="topicForm"
+        method="post"
+        action="{{ url_for('generate') }}"
+        class="space-y-6"
+      >
+        <input type="hidden" name="board" value="{{ board }}" />
+        <input type="hidden" name="class" value="{{ class_name }}" />
+        {% for subject in subjects %}
+        <input type="hidden" name="subject" value="{{ subject }}" />
+        {% endfor %}
+        <input type="hidden" name="step" value="topics" id="stepInput" />
 
-      <!-- Chapters -->
-      <div>
-        <h3 class="text-lg font-semibold text-gray-700 mb-2">Chapters</h3>
-        {% if chapters %}
-        <div class="space-y-2">
+        {% for subject, chapters in subject_chapter_map.items() %}
+        <div>
+          <h2 class="text-xl font-semibold text-blue-800 mb-4">
+            {{ subject }}
+          </h2>
           {% for chapter in chapters %}
-          <div class="flex items-center">
-            <input type="checkbox" name="chapters" value="{{ chapter.text }}" class="mr-2"/>
-            <label class="text-sm text-gray-600">{{ chapter.text }}</label>
+          <div class="border p-4 rounded mb-4 bg-gray-50">
+            <h3 class="text-lg font-semibold text-gray-800">
+              <input
+                type="checkbox"
+                name="chapters"
+                value="{{ chapter.chapter }}"
+                class="mr-2"
+              />
+              {{ chapter.chapter }}
+            </h3>
+
+            {% if chapter.topics %}
+            <div class="ml-4 mt-2 space-y-3">
+              {% for topic in chapter.topics %}
+              <div class="border-l-4 border-blue-300 pl-4">
+                <label class="font-medium text-gray-700">
+                  <input
+                    type="checkbox"
+                    name="topics"
+                    value="{{ topic.topic }}"
+                    class="mr-2"
+                  />
+                  {{ topic.topic }}
+                </label>
+
+                {% if topic.subtopics %}
+                <div class="ml-6 mt-1 space-y-1 text-sm text-gray-700">
+                  {% for sub in topic.subtopics %}
+                  <label class="block">
+                    <input
+                      type="checkbox"
+                      name="subtopics"
+                      value="{{ sub.text }}"
+                      class="mr-2"
+                    />
+                    {{ sub.text }}
+                  </label>
+                  {% endfor %}
+                </div>
+                {% endif %}
+              </div>
+              {% endfor %}
+            </div>
+            {% endif %}
           </div>
           {% endfor %}
         </div>
-        {% else %}
-        <p class="text-sm text-gray-600">No chapters available for {{ subject }}.</p>
-        {% endif %}
-      </div>
+        {% endfor %}
 
-      <!-- Topics -->
-      <div>
-        <h3 class="text-lg font-semibold text-gray-700 mb-2">Topics</h3>
-        {% if topics %}
-        <div class="space-y-2">
-          {% for topic in topics %}
-          <div class="flex items-center">
-            <input type="checkbox" name="topics" value="{{ topic.text }}" class="mr-2"/>
-            <label class="text-sm text-gray-600">{{ topic.text }}</label>
+        <!-- Number Inputs -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div>
+            <label class="block text-sm font-medium text-gray-700"
+              >Min questions/topic:</label
+            >
+            <input
+              type="number"
+              name="min_questions"
+              class="w-full border border-gray-300 rounded px-3 py-2"
+            />
           </div>
-          {% endfor %}
-        </div>
-        {% else %}
-        <p class="text-sm text-gray-600">No topics available for {{ subject }}.</p>
-        {% endif %}
-      </div>
-
-      <!-- Subtopics -->
-      <div>
-        <h3 class="text-lg font-semibold text-gray-700 mb-2">Subtopics</h3>
-        {% if subtopics %}
-        <div class="space-y-2">
-          {% for subtopic in subtopics %}
-          <div class="flex items-center">
-            <input type="checkbox" name="subtopics" value="{{ subtopic.text }}" class="mr-2"/>
-            <label class="text-sm text-gray-600">{{ subtopic.text }}</label>
+          <div>
+            <label class="block text-sm font-medium text-gray-700"
+              >Max questions/topic:</label
+            >
+            <input
+              type="number"
+              name="max_questions"
+              class="w-full border border-gray-300 rounded px-3 py-2"
+            />
           </div>
-          {% endfor %}
-        </div>
-        {% else %}
-        <p class="text-sm text-gray-600">No subtopics found for {{ subject }}.</p>
-        {% endif %}
-      </div>
-
-      <!-- Number Inputs -->
-      <div class="space-y-4">
-        <div>
-          <label class="block text-sm font-medium text-gray-700">Min questions/topic:</label>
-          <input type="number" name="min_questions" class="w-full border border-gray-300 rounded px-3 py-2"/>
+          <div>
+            <label class="block text-sm font-medium text-gray-700"
+              >Total questions/subject:</label
+            >
+            <input
+              type="number"
+              name="total_questions"
+              class="w-full border border-gray-300 rounded px-3 py-2"
+            />
+          </div>
         </div>
 
-        <div>
-          <label class="block text-sm font-medium text-gray-700">Max questions/topic:</label>
-          <input type="number" name="max_questions" class="w-full border border-gray-300 rounded px-3 py-2"/>
+        <!-- Prerequisite Checkbox -->
+        <div class="flex items-center mt-4">
+          <input
+            type="checkbox"
+            name="prerequisite"
+            value="on"
+            id="prerequisite"
+            class="mr-2"
+          />
+          <label for="prerequisite" class="text-sm text-gray-700">
+            Generate questions only from prerequisite topics
+          </label>
         </div>
 
-        <div>
-          <label class="block text-sm font-medium text-gray-700">Total questions/subject:</label>
-          <input type="number" name="total_questions" class="w-full border border-gray-300 rounded px-3 py-2"/>
+        <div class="text-center mt-6">
+          <button
+            type="submit"
+            id="submitBtn"
+            class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-2 rounded w-full"
+          >
+            Generate JSON & PDF Code
+          </button>
         </div>
-      </div>
+      </form>
+    </div>
 
-      <!-- Prerequisite Checkbox -->
-      <div class="flex items-center">
-        <input type="checkbox" name="prerequisite" value="on" id="prerequisite" class="mr-2" />
-        <label for="prerequisite" class="text-sm text-gray-700">
-          Generate questions only from prerequisite topics
-        </label>
-      </div>
+    <script>
+      document.addEventListener("DOMContentLoaded", function () {
+        // When chapter is toggled
+        document
+          .querySelectorAll('input[name="chapters"]')
+          .forEach((chapterCheckbox) => {
+            chapterCheckbox.addEventListener("change", function () {
+              const chapterDiv = chapterCheckbox.closest(".border");
+              if (!chapterDiv) return;
 
-      <div class="text-center">
-        <button type="submit" id="submitBtn" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-2 rounded w-full">
-          Generate JSON & PDF Code
-        </button>
-      </div>
-    </form>
-  </div>
+              const topicCheckboxes = chapterDiv.querySelectorAll(
+                'input[name="topics"]'
+              );
+              const subtopicCheckboxes = chapterDiv.querySelectorAll(
+                'input[name="subtopics"]'
+              );
 
-  <script>
-    document.getElementById("topicForm").addEventListener("submit", function (e) {
-      const prereq = document.getElementById("prerequisite");
-      const stepInput = document.getElementById("stepInput");
+              topicCheckboxes.forEach(
+                (cb) => (cb.checked = chapterCheckbox.checked)
+              );
+              subtopicCheckboxes.forEach(
+                (cb) => (cb.checked = chapterCheckbox.checked)
+              );
+            });
+          });
 
-      // If checked, start with prerequisite topics step
-      if (prereq.checked) {
-        if (stepInput.value === "topics") {
-          // Let it submit and next page will render a "Next" button
-        } else if (stepInput.value === "questions") {
-          // Continue to generate questions
-        }
-      }
-    });
-  </script>
-</body>
+        // When topic is toggled
+        document
+          .querySelectorAll('input[name="topics"]')
+          .forEach((topicCheckbox) => {
+            topicCheckbox.addEventListener("change", function () {
+              const topicBlock = topicCheckbox.closest(".border-l-4");
+              if (!topicBlock) return;
+
+              const subtopicCheckboxes = topicBlock.querySelectorAll(
+                'input[name="subtopics"]'
+              );
+              subtopicCheckboxes.forEach(
+                (cb) => (cb.checked = topicCheckbox.checked)
+              );
+            });
+          });
+      });
+      document
+        .getElementById("topicForm")
+        .addEventListener("submit", function (e) {
+          const prereq = document.getElementById("prerequisite");
+          const stepInput = document.getElementById("stepInput");
+
+          if (prereq.checked) {
+            if (stepInput.value === "topics") {
+              // Let it submit
+            } else if (stepInput.value === "questions") {
+              // Proceed
+            }
+          }
+        });
+    </script>
+  </body>
 </html>
