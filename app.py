@@ -158,8 +158,14 @@ def normalize_chapter_structure(chapter):
             "topic": topic_name,
             "subtopics": normalized_subtopics
         })
-    chapter["topics"] = normalized_topics
-    return chapter
+
+    return {
+        "number": chapter.get("number"),
+        "chapter": chapter.get("chapter"),
+        "topics": normalized_topics,
+        "reason": chapter.get("reason"),
+        "for": chapter.get("for")
+    }
 
 @app.route('/generate', methods=['POST'])
 def generate():
@@ -657,6 +663,13 @@ def recursive_prereq(level):
             selected_chapters = request.form.getlist("selected_prereq_chapter")
             selected_topics = request.form.getlist("selected_prereq_topic")
             selected_subtopics = request.form.getlist("selected_prereq_subtopic")
+            
+            render_path = os.path.join("structured_data", f"prereq_render_items_level_{level - 1}.json")
+            if os.path.exists(render_path):
+                with open(render_path, "r") as f:
+                    render_items = json.load(f)
+            else:
+                render_items = []
 
             if os.path.exists(selected_structure_path):
                 with open(selected_structure_path, "r") as f:
@@ -676,15 +689,61 @@ def recursive_prereq(level):
                     previous_level_data = json.load(f)
             else:
                 previous_level_data = {}
+                
+            # Clone and normalize a copy for pop logic
+            render_lookup_items = render_items.copy()
 
             for ch_name in selected_chapters:
+                print(f"\n🔄 Checking selected chapter: {ch_name}")
                 for subject in previous_level_data:
                     full_chapter_list = previous_level_data[subject]
-                    matched = next((ch for ch in full_chapter_list if ch["chapter"] == ch_name), None)
-                    if matched and matched["chapter"] not in {item["chapter"] for item in current_structure[class_key][subject]}:
-                        chapter_obj = normalize_chapter_structure(matched)
-                        current_structure[class_key][subject].append(chapter_obj)
 
+                    matched = next((ch for ch in full_chapter_list if ch["chapter"] == ch_name), None)
+                    if not matched:
+                        print(f"❌ No match found in previous level for: {ch_name}")
+                        continue
+
+                    print(f"📘 Subject: {subject}")
+                    print(f"✅ Matched Chapter: {matched['chapter']}")
+                    
+                    existing_pairs = {
+                        (item["chapter"], item.get("for", None)) for item in current_structure[class_key][subject]
+                    }
+
+                    chapter_obj = normalize_chapter_structure(matched)
+                    
+                    subj_l = subject.strip().lower()
+                    chap_l = matched["chapter"].strip().lower()
+
+                    found_index = None
+                    for idx, item in enumerate(render_lookup_items):
+                        if item.get("subject", "").strip().lower() == subj_l and item.get("chapter", "").strip().lower() == chap_l:
+                            found_index = idx
+                            break
+
+                    if found_index is not None:
+                        matched_item = render_lookup_items.pop(found_index)
+                        chapter_obj["for"] = matched_item.get("for")
+                        chapter_obj["reason"] = matched_item.get("reason")
+                        print(f"🔎 Found for: {chapter_obj['for']}")
+                        print(f"🔎 Found reason: {chapter_obj['reason']}")
+                    else:
+                        print(f"⚠️ No unique match found in render_items for ({subject}, {matched['chapter']})")
+                        chapter_obj["for"] = None
+                        chapter_obj["reason"] = None
+                        
+                    print(f"📎 Normalized Chapter Obj: {chapter_obj}")
+
+                    if (chapter_obj["chapter"], chapter_obj.get("for")) not in existing_pairs:
+                        print("➕ Adding chapter to selected structure")
+                        current_structure[class_key][subject].append(chapter_obj)
+                    else:
+                        print("🔁 Chapter already exists with same 'for'. Updating reason...")
+                        # Optional: update reason if it's new
+                        for item in current_structure[class_key][subject]:
+                            if item["chapter"] == chapter_obj["chapter"] and item.get("for") == chapter_obj.get("for"):
+                                item["reason"] = chapter_obj.get("reason")
+            
             for subject in previous_level_data:
                 full_chapter_list = previous_level_data[subject]
                 for chapter in full_chapter_list:
@@ -707,12 +766,12 @@ def recursive_prereq(level):
         with open(selected_structure_path, "r") as f:
             selected_data = json.load(f)
 
-        render_path = os.path.join("structured_data", f"prereq_render_items_level_{level - 1}.json")
-        if os.path.exists(render_path):
-            with open(render_path, "r") as f:
-                render_items = json.load(f)
-        else:
-            render_items = []
+        # render_path = os.path.join("structured_data", f"prereq_render_items_level_{level - 1}.json")
+        # if os.path.exists(render_path):
+        #     with open(render_path, "r") as f:
+        #         render_items = json.load(f)
+        # else:
+        #     render_items = []
 
         # Build normalized reason map
         reason_map = {
@@ -905,15 +964,61 @@ def recursive_prereq(level):
                 previous_level_data = json.load(f)
         else:
             previous_level_data = {}
+            
+        # Clone and normalize a copy for pop logic
+        render_lookup_items = render_items.copy()
 
         for ch_name in selected_chapters:
+            print(f"\n🔄 Checking selected chapter: {ch_name}")
             for subject in previous_level_data:
                 full_chapter_list = previous_level_data[subject]
-                matched = next((ch for ch in full_chapter_list if ch["chapter"] == ch_name), None)
-                if matched and matched["chapter"] not in {item["chapter"] for item in current_structure[class_key][subject]}:
-                    chapter_obj = normalize_chapter_structure(matched)
-                    current_structure[class_key][subject].append(chapter_obj)
 
+                matched = next((ch for ch in full_chapter_list if ch["chapter"] == ch_name), None)
+                if not matched:
+                    print(f"❌ No match found in previous level for: {ch_name}")
+                    continue
+
+                print(f"📘 Subject: {subject}")
+                print(f"✅ Matched Chapter: {matched['chapter']}")
+                
+                existing_pairs = {
+                    (item["chapter"], item.get("for", None)) for item in current_structure[class_key][subject]
+                }
+
+                chapter_obj = normalize_chapter_structure(matched)
+                
+                subj_l = subject.strip().lower()
+                chap_l = matched["chapter"].strip().lower()
+
+                found_index = None
+                for idx, item in enumerate(render_lookup_items):
+                    if item.get("subject", "").strip().lower() == subj_l and item.get("chapter", "").strip().lower() == chap_l:
+                        found_index = idx
+                        break
+
+                if found_index is not None:
+                    matched_item = render_lookup_items.pop(found_index)
+                    chapter_obj["for"] = matched_item.get("for")
+                    chapter_obj["reason"] = matched_item.get("reason")
+                    print(f"🔎 Found for: {chapter_obj['for']}")
+                    print(f"🔎 Found reason: {chapter_obj['reason']}")
+                else:
+                    print(f"⚠️ No unique match found in render_items for ({subject}, {matched['chapter']})")
+                    chapter_obj["for"] = None
+                    chapter_obj["reason"] = None
+                    
+                print(f"📎 Normalized Chapter Obj: {chapter_obj}")
+
+                if (chapter_obj["chapter"], chapter_obj.get("for")) not in existing_pairs:
+                    print("➕ Adding chapter to selected structure")
+                    current_structure[class_key][subject].append(chapter_obj)
+                else:
+                    print("🔁 Chapter already exists with same 'for'. Updating reason...")
+                    # Optional: update reason if it's new
+                    for item in current_structure[class_key][subject]:
+                        if item["chapter"] == chapter_obj["chapter"] and item.get("for") == chapter_obj.get("for"):
+                            item["reason"] = chapter_obj.get("reason")
+                  
         for subject in previous_level_data:
             full_chapter_list = previous_level_data[subject]
             for chapter in full_chapter_list:
@@ -940,30 +1045,56 @@ def recursive_prereq(level):
 
 def inject_reasons_into_selected_data(selected_data, level):
     render_path = os.path.join("structured_data", f"prereq_render_items_level_{level}.json")
+    print(f"\n📂 Looking for render file at: {render_path}")
     if not os.path.exists(render_path):
+        print("❌ Render file does not exist.")
         return
 
     with open(render_path, "r") as f:
         render_items = json.load(f)
 
+    print(f"📄 Loaded {len(render_items)} render items from level {level}")
+
     enriched_map = {
-        (item.get("subject", "").strip().lower(), item.get("chapter", "").strip().lower()): {
+        (
+            (item.get("subject") or "").strip().lower(),
+            (item.get("chapter") or "").strip().lower(),
+            (item.get("for") or "").strip().lower()
+        ): {
             "reason": item.get("reason"),
             "for": item.get("for")
         }
         for item in render_items
     }
 
+    print(f"🧠 Enriched Map Keys Preview (first 5):")
+    for i, k in enumerate(enriched_map.keys()):
+        if i >= 5:
+            break
+        print(f"  🔑 {k}")
+
     for class_key, subjects_data in selected_data.items():
+        print(f"\n🏫 Processing Class Key: {class_key}")
         for subject, chapter_list in subjects_data.items():
             subj_key = subject.strip().lower()
+            print(f"\n📘 Subject: {subject}")
             for chapter in chapter_list:
-                chap_key = chapter.get("chapter", "").strip().lower()
-                enrichment = enriched_map.get((subj_key, chap_key))
+                chap_key = (chapter.get("chapter") or "").strip().lower()
+                for_key = (chapter.get("for") or "").strip().lower()
+
+                map_key = (subj_key, chap_key, for_key)
+                enrichment = enriched_map.get(map_key)
+
+                print(f"\n🔎 Looking up enrichment for key: {map_key}")
                 if enrichment:
+                    print(f"✅ Found! Reason: {enrichment.get('reason')} | For: {enrichment.get('for')}")
                     chapter["reason"] = enrichment.get("reason")
                     chapter["for"] = enrichment.get("for")
+                else:
+                    print("⚠️ No match found in enriched map for this chapter.")
 
+    print("\n✅ Done injecting reasons into selected data.\n")
+    
 def inject_reasons_and_for_into_selected_data(selected_data, level):
     render_path = os.path.join("structured_data", f"prereq_render_items_level_{level}.json")
     if not os.path.exists(render_path):
