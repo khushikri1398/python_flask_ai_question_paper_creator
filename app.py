@@ -4,8 +4,13 @@ import json
 import pprint
 import requests
 import subprocess
+import io
 from fpdf import FPDF
 from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for, session
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+from reportlab.lib.units import mm
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
@@ -219,30 +224,51 @@ def finalize_prereq():
 
 @app.route('/generate_questions')
 def generate_questions():
-    list_data = session.get("list_to_generate_questions", {})
-    if not list_data:
-        return "Session expired or no data available. Please start again."
+    # Load selected structure
+    try:
+        with open("structured_data/selected_structure.json", "r") as f:
+            selected_structure = json.load(f)
+    except FileNotFoundError:
+        return "Error: selected_structure.json not found."
 
-    board = list_data.get("board")
-    class_name = list_data.get("class")
-    subjects = list_data.get("subjects")
-    chapters = list_data.get("chapters", [])
-    topics = list_data.get("topics", [])
-    subtopics = list_data.get("subtopics", [])
+    # Load and build tree
+    from app import build_prerequisite_tree_minimal  # if in same file, remove this line
+    tree = build_prerequisite_tree_minimal(selected_structure)
 
-    # Just in case defaults were not set earlier
+    # Flatten tree to markdown-style input
+    def flatten_tree(chapters, level=0):
+        lines = []
+        for ch in chapters:
+            prefix = "  " * level + "- "
+            line = f"{prefix}{ch['chapter']} (Chapter {ch['number']}, {ch['class']})"
+            if "reason" in ch:
+                line += f"\n{'  ' * (level + 1)}Reason: {ch['reason']}"
+            lines.append(line)
+            if ch.get("prerequisites"):
+                lines.extend(flatten_tree(ch["prerequisites"], level + 1))
+        return lines
+
+    flat_lines = []
+    for class_key, subject_map in tree.items():
+        for subject, chapters in subject_map.items():
+            flat_lines.append(f"## {subject} - {class_key}")
+            flat_lines.extend(flatten_tree(chapters, 1))
+
+    prerequisite_text = "\n".join(flat_lines)
+
+    # Basic metadata for prompt
+    class_name = list(selected_structure.keys())[0].replace("class_", "")
+    subjects = list(selected_structure[list(selected_structure.keys())[0]].keys())
+
     min_questions = request.args.get("min_questions", "1")
     max_questions = request.args.get("max_questions", "2")
     total_questions = request.args.get("total_questions", "10")
 
     prompt_data = {
         "task": "Generate multiple-choice questions",
-        "board": board,
         "class": class_name,
-        "subject": subjects,
-        "chapters": chapters,
-        "topics": topics,
-        "subtopics": subtopics,
+        "subjects": subjects,
+        "prerequisites": prerequisite_text,
         "min_questions": min_questions,
         "max_questions": max_questions,
         "total_questions": total_questions
@@ -252,18 +278,19 @@ def generate_questions():
         "You are an AI that only responds with valid JSON. "
         "Do not include any explanations or natural language text. "
         "Just return a JSON object with the format:\n"
-        "{ 'board': 'CBSE', 'class': '10', 'subject': ['Mathematics'], 'questions': [ { 'question': ..., 'options': [...], 'correct_answer': ... } ] }\n"
-        f"Generate exactly {total_questions} MCQs based on provided inputs."
+        "{ 'class': '8', 'subject': ['Mathematics'], 'questions': [ { 'question': ..., 'options': [...], 'correct_answer': ... } ] }\n"
+        f"Generate exactly {total_questions} MCQs based on the prerequisite context provided below."
     )
 
-    ollama_prompt = f"{system_prompt}\n{json.dumps(prompt_data, indent=4)}"
+    ollama_prompt = f"{system_prompt}\n\n---\n\n{json.dumps(prompt_data, indent=2)}"
 
     try:
         result = subprocess.run(["ollama", "run", "llama3"], input=ollama_prompt, capture_output=True, text=True, timeout=1000000)
         output = result.stdout.strip()
-        paper_json = json.loads(output[output.find('{'):output.rfind('}')+1]) if output else {}
+        print("Ollama Output:", output)
+        paper_json = json.loads(output[output.find('{'):output.rfind('}') + 1]) if output else {}
         if not paper_json.get("questions"):
-            return "Error: Ollama did not return valid questions. Please retry with more input."
+            return "Error: Ollama did not return valid questions. Please retry."
     except Exception as e:
         return f"Error: Could not generate questions. Details: {str(e)}"
 
@@ -294,6 +321,97 @@ def generate_pdf(data, output_pdf):
         pdf.ln(5)
 
     pdf.output(output_pdf)
+
+def generate_prerequisite_pdf(tree):
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+
+    margin_left = 30
+    margin_right = 30
+    margin_top = 40
+    margin_bottom = 40
+
+    y = height - margin_top
+    line_height = 22
+    max_indent = 80
+    sidebar_width = 5
+
+    background_colors = [colors.whitesmoke, colors.lightgrey]
+    sidebar_colors = [
+        colors.red, colors.orange, colors.green, 
+        colors.cadetblue, colors.purple, colors.brown, colors.teal
+    ]
+
+    line_counter = 0  # for background color alternation
+
+    def draw_text_block(text, level, font="Helvetica", font_size=11):
+        nonlocal y, line_counter
+
+        if y < margin_bottom + line_height:
+            c.showPage()
+            y = height - margin_top
+            line_counter = 0  # reset background alternation
+
+        indent = min(level * 20, max_indent)
+        x_pos = margin_left + indent + sidebar_width + 5
+
+        # Draw background band
+        bg_color = background_colors[line_counter % 2]
+        c.setFillColor(bg_color)
+        c.rect(margin_left, y - line_height + 4, width - margin_left - margin_right, line_height, fill=1, stroke=0)
+
+        # Draw left color sidebar
+        sidebar_color = sidebar_colors[level % len(sidebar_colors)]
+        c.setFillColor(sidebar_color)
+        c.rect(margin_left, y - line_height + 4, sidebar_width, line_height, fill=1, stroke=0)
+
+        # Draw text
+        c.setFillColor(colors.black)
+        c.setFont(font, font_size)
+        c.drawString(x_pos, y, text)
+
+        y -= line_height
+        line_counter += 1
+
+    def draw_chapters(chapters, level=0):
+        for chapter in chapters:
+            chapter_text = f"{chapter['chapter']} (Chapter {chapter['number']}, {chapter['class']})"
+            draw_text_block(chapter_text, level, font="Helvetica-Bold", font_size=12)
+
+            if "reason" in chapter:
+                reason_text = f"Reason: {chapter['reason']}"
+                draw_text_block(reason_text, level + 1, font="Helvetica-Oblique", font_size=10)
+
+            if chapter.get("prerequisites"):
+                draw_chapters(chapter["prerequisites"], level + 1)
+
+    for class_key, subjects in tree.items():
+        for subject, chapters in subjects.items():
+            heading_text = f"{subject} - {class_key}"
+            draw_text_block(heading_text, 0, font="Helvetica-Bold", font_size=14)
+            draw_chapters(chapters, level=1)
+            y -= line_height // 2  # small space between subjects
+
+    c.save()
+    buffer.seek(0)
+    return buffer
+
+@app.route('/download_prereqs')
+def download_prereqs():
+    try:
+        with open("structured_data/prerequisite_tree.json", "r") as f:
+            tree = json.load(f)
+    except FileNotFoundError:
+        return "Prerequisite tree not found", 404
+
+    pdf_buffer = generate_prerequisite_pdf(tree)
+    return send_file(
+        pdf_buffer,
+        as_attachment=True,
+        download_name="Prerequisite_Tree.pdf",
+        mimetype="application/pdf"
+    )
 
 @app.route('/download_pdf')
 def download_pdf():
@@ -389,6 +507,134 @@ def fetch_structured_previous_year_content(board, class_name, subjects, depth=1,
         json.dump(full_structure, f, indent=4)
     return full_structure
 
+def build_prerequisite_tree(selected_structure):
+    import copy
+
+    # Sort class keys by descending class number
+    sorted_classes = sorted(
+        selected_structure.keys(),
+        key=lambda k: int(k.split('_')[1]),
+        reverse=True
+    )
+
+    if not sorted_classes:
+        return {}
+
+    top_class_key = sorted_classes[0]
+    result = copy.deepcopy(selected_structure[top_class_key])  # Start with topmost class chapters
+
+    # Create subject → chapter name → chapter dict map for all classes
+    all_chapter_map = {}
+    for class_key in selected_structure:
+        for subject, chapters in selected_structure[class_key].items():
+            all_chapter_map.setdefault(subject, {})
+            for ch in chapters:
+                ch_name = ch.get("chapter")
+                if ch_name:
+                    all_chapter_map[subject][ch_name] = copy.deepcopy(ch)
+
+    # Helper to recursively attach prerequisites
+    def attach_prerequisites(subject, chapter_name, current_class_index, visited=None):
+        if visited is None:
+            visited = set()
+        if chapter_name in visited:
+            return []
+        visited.add(chapter_name)
+
+        prerequisites = []
+        # Look only in lower classes
+        for lower_class_index in range(current_class_index + 1, len(sorted_classes)):
+            class_key = sorted_classes[lower_class_index]
+            chapters = selected_structure.get(class_key, {}).get(subject, [])
+
+            for ch in chapters:
+                target = ch.get("for")
+                ch_name = ch.get("chapter")
+
+                # Case 1: Chapter explicitly points to current chapter
+                if target == chapter_name:
+                    ch_copy = copy.deepcopy(ch)
+                    ch_copy.pop("for", None)
+                    ch_copy["prerequisites"] = attach_prerequisites(subject, ch_name, lower_class_index, visited)
+                    prerequisites.append(ch_copy)
+
+                # Case 2: No "for" field — assume it applies to all higher chapters
+                elif not target:
+                    ch_copy = copy.deepcopy(ch)
+                    ch_copy["prerequisites"] = attach_prerequisites(subject, ch_name, lower_class_index, visited)
+                    prerequisites.append(ch_copy)
+
+        return prerequisites
+
+    # Build tree from topmost class downward
+    for subject, chapters in result.items():
+        for chapter in chapters:
+            chapter_name = chapter.get("chapter")
+            chapter["prerequisites"] = attach_prerequisites(subject, chapter_name, 0)
+
+    return {top_class_key: result}
+
+def build_prerequisite_tree_minimal(selected_structure):
+    import copy
+
+    # Sort class keys like ['class_8', 'class_7', ...]
+    sorted_classes = sorted(
+        selected_structure.keys(),
+        key=lambda k: int(k.split('_')[1]),
+        reverse=True
+    )
+
+    if not sorted_classes:
+        return {}
+
+    top_class_key = sorted_classes[0]
+    result = {}
+
+    # Helper to extract minimal chapter info including reason
+    def minimal_chapter_obj(ch, class_key):
+        obj = {
+            "number": ch.get("number"),
+            "chapter": ch.get("chapter"),
+            "class": class_key
+        }
+        if ch.get("reason"):
+            obj["reason"] = ch["reason"]
+        return obj
+
+    # Only attach if 'for' matches a chapter
+    def attach_prerequisites(subject, chapter_name, current_class_index, visited=None):
+        if visited is None:
+            visited = set()
+        if (subject, chapter_name) in visited:
+            return []
+        visited.add((subject, chapter_name))
+
+        prerequisites = []
+        for lower_class_index in range(current_class_index + 1, len(sorted_classes)):
+            class_key = sorted_classes[lower_class_index]
+            chapters = selected_structure.get(class_key, {}).get(subject, [])
+
+            for ch in chapters:
+                ch_name = ch.get("chapter")
+                target = ch.get("for")
+                if target and target.strip() == chapter_name:
+                    ch_entry = minimal_chapter_obj(ch, class_key)
+                    ch_entry["prerequisites"] = attach_prerequisites(subject, ch_name, lower_class_index, visited)
+                    prerequisites.append(ch_entry)
+
+        return prerequisites
+
+    result[top_class_key] = {}
+    for subject, chapters in selected_structure[top_class_key].items():
+        result[top_class_key][subject] = []
+        for ch in chapters:
+            chapter_name = ch.get("chapter")
+            ch_entry = minimal_chapter_obj(ch, top_class_key)
+            ch_entry["prerequisites"] = attach_prerequisites(subject, chapter_name, 0)
+            result[top_class_key][subject].append(ch_entry)
+
+    return result
+
 # --- Recursive Prerequisite Route ---
 @app.route('/recursive_prereq/<int:level>', methods=['GET', 'POST'])
 def recursive_prereq(level):
@@ -470,7 +716,7 @@ def recursive_prereq(level):
 
         # Build normalized reason map
         reason_map = {
-            (item.get("subject", "").strip().lower(), item.get("chapter", "").strip().lower()): item.get("reason")
+            (item.get("subject", "").strip().lower(), item.get("chapter", "").strip().lower()): {"reason" : item.get("reason"), "for": item.get("for")}
             for item in render_items
         }
 
@@ -482,14 +728,24 @@ def recursive_prereq(level):
                     chap_key = chapter.get("chapter", "").strip().lower()
                     reason = reason_map.get((subj_key, chap_key))
                     if reason:
-                        chapter["reason"] = reason
+                        if reason.get("reason"):
+                            chapter["reason"] = reason["reason"]
+                        if reason.get("for"):
+                            chapter["for"] = reason["for"]
+                        
+        with open(selected_structure_path, "w") as f:
+            json.dump(selected_data, f, indent=4)
+                        
+        with open("structured_data/selected_structure.json", "r") as f:
+            selected_structure = json.load(f)
 
-        print("Selected Data with Reasons:")
-        import pprint
-        pprint.pprint(selected_data)
-        pprint.pprint(current_structure)
+        tree = build_prerequisite_tree_minimal(selected_structure)
 
-        return render_template("next_step.html", selected_json=selected_data)
+        # Save output to a file for inspection
+        with open("structured_data/prerequisite_tree.json", "w") as f:
+            json.dump(tree, f, indent=2)
+
+        return render_template("next_step.html", tree_json = tree)
 
     # --- NORMAL FLOW ---
     if request.method == 'POST':
@@ -497,9 +753,29 @@ def recursive_prereq(level):
         selected_topics = request.form.getlist("selected_prereq_topic")
         selected_subtopics = request.form.getlist("selected_prereq_subtopic")
     else:
-        selected_chapters = selected_chapter_names
-        selected_topics = []
-        selected_subtopics = []
+        if level == 1:
+            # Get initial selected structure for current class
+            current_class_key = f"class_{class_name}"
+            initial_selected_chapters = []
+
+            if os.path.exists(selected_structure_path):
+                with open(selected_structure_path, "r") as f:
+                    selected_structure_data = json.load(f)
+
+                for subject, chapters in selected_structure_data.get(current_class_key, {}).items():
+                    for ch in chapters:
+                        initial_selected_chapters.append({
+                            "number": ch.get("number"),
+                            "chapter": ch.get("chapter")
+                        })
+
+            selected_chapters = initial_selected_chapters
+            selected_topics = []
+            selected_subtopics = []
+        else:
+            selected_chapters = selected_chapter_names
+            selected_topics = []
+            selected_subtopics = []
 
     prev_year_struct_path = f"structured_data/previous_year_depth_{level}.json"
     if os.path.exists(prev_year_struct_path):
@@ -514,59 +790,98 @@ def recursive_prereq(level):
         subject: {ch['number']: ch['chapter'] for ch in chapters}
         for subject, chapters in previous_year_data.items()
     }
-
-    prompt = f"""
-You are an academic AI assistant.
-
-Given:
-- The selected chapters by the user from the previous year (with chapter numbers and names).
-- The older year's chapter list for the same subject and board.
-
-Return only relevant prerequisites (chapter number + name) with reasons.
-
-Format:
-{{
-  "prerequisites": {{
-    "Subject": [
-      {{
-        "number": 1,
-        "chapter": "Exact Chapter Name",
-        "reason": "Why this chapter is needed"
-      }}
-    ]
-  }}
-}}
-
-Selected Chapters:
-{json.dumps(selected_chapters, indent=2)}
-
-Previous Year Chapters:
-{json.dumps(chapter_index_map, indent=2)}
-"""
-
-    try:
-        result = subprocess.run([
-            "ollama", "run", "llama3"
-        ], input=prompt, capture_output=True, text=True, timeout=1000000)
-        output = result.stdout.strip()
-        prereq_json = json.loads(output[output.find("{"):output.rfind("}") + 1]) if output else {}
-    except Exception as e:
-        return f"Error during prerequisite generation: {str(e)}"
-
+    
+    print("Selected Chapters:", selected_chapters)
+    
     render_items = []
-    for subject, prereqs in prereq_json.get("prerequisites", {}).items():
-        full_chapter_list = previous_year_data.get(subject, [])
-        for req in prereqs:
-            chapter_num = req["number"]
-            matched_ch = next((ch for ch in full_chapter_list if ch.get("number") == chapter_num), None)
-            if matched_ch:
-                render_items.append({
-                    "subject": subject,
-                    "number": chapter_num,
-                    "chapter": matched_ch.get("chapter", ""),
-                    "topics": matched_ch.get("topics", []),
-                    "reason": req.get("reason", "")
-                })
+
+    for subject in subjects:
+        relevant_chapters = []
+        
+        # For level 1, selected_chapters is a list of dicts with numbers
+        if isinstance(selected_chapters[0], dict):
+            relevant_chapters = selected_chapters
+        else:
+            # For other levels, treat as chapter names
+            relevant_chapters = [{"chapter": name} for name in selected_chapters]
+
+        prompted_chapters = set()  # (subject, chapter_name) pairs
+
+        for ch in relevant_chapters:
+            chapter_name = ch.get("chapter")
+            if not chapter_name:
+                continue
+
+            # Mark as prompted early (we'll still store but not prompt again)
+            is_duplicate_prompt = (subject, chapter_name) in prompted_chapters
+            if not is_duplicate_prompt:
+                prompted_chapters.add((subject, chapter_name))
+
+            # Format prompt
+            prompt = f"""
+    You are an academic AI assistant helping to identify prerequisite chapters.
+
+    Context:
+    - The user has selected a specific chapter from a current year's syllabus.
+    - You are also given the chapter list from the previous year's syllabus for the same subject and board.
+
+    Instructions:
+    1. Identify only those prerequisite chapters that are clearly and directly related.
+    2. Avoid abstract or general background prerequisites.
+    3. All suggested prerequisites must come from the previous year's chapter list.
+
+    Output Format:
+    {{
+    "prerequisites": {{
+        "{subject}": [
+        {{
+            "number": 1,
+            "chapter": "Exact Chapter Name",
+            "reason": "Why this chapter is needed",
+            "for": "{chapter_name}"
+        }}
+        ]
+    }}
+    }}
+
+    Selected Chapter:
+    {json.dumps([{"chapter": chapter_name}], indent=2)}
+
+    Previous Year Chapters:
+    {json.dumps(chapter_index_map.get(subject, {}), indent=2)}
+    """
+
+            try:
+                result = subprocess.run(
+                    ["ollama", "run", "llama3"],
+                    input=prompt,
+                    capture_output=True,
+                    text=True,
+                    timeout=1000000
+                )
+                output = result.stdout.strip()
+                print("📥 Ollama Output:\n", output[:300])  # preview
+                prereq_json = json.loads(output[output.find("{"):output.rfind("}") + 1]) if output else {}
+
+                prereqs = prereq_json.get("prerequisites", {}).get(subject, [])
+                full_chapter_list = previous_year_data.get(subject, [])
+
+                for req in prereqs:
+                    chapter_num = req.get("number")
+                    matched_ch = next((c for c in full_chapter_list if c.get("number") == chapter_num), None)
+                    if matched_ch:
+                        render_items.append({
+                            "subject": subject,
+                            "number": chapter_num,
+                            "chapter": matched_ch.get("chapter", ""),
+                            "topics": matched_ch.get("topics", []),
+                            "reason": req.get("reason", ""),
+                            "for": req.get("for", chapter_name)
+                        })
+
+            except Exception as e:
+                print(f"❌ Error for {subject} - {chapter_name}: {e}")
+                continue
 
     with open(os.path.join("structured_data", f"prereq_render_items_level_{level}.json"), "w") as f:
         json.dump(render_items, f, indent=2)
@@ -631,8 +946,11 @@ def inject_reasons_into_selected_data(selected_data, level):
     with open(render_path, "r") as f:
         render_items = json.load(f)
 
-    reason_map = {
-        (item.get("subject", "").strip().lower(), item.get("chapter", "").strip().lower()): item.get("reason")
+    enriched_map = {
+        (item.get("subject", "").strip().lower(), item.get("chapter", "").strip().lower()): {
+            "reason": item.get("reason"),
+            "for": item.get("for")
+        }
         for item in render_items
     }
 
@@ -641,9 +959,41 @@ def inject_reasons_into_selected_data(selected_data, level):
             subj_key = subject.strip().lower()
             for chapter in chapter_list:
                 chap_key = chapter.get("chapter", "").strip().lower()
-                reason = reason_map.get((subj_key, chap_key))
-                if reason:
-                    chapter["reason"] = reason
+                enrichment = enriched_map.get((subj_key, chap_key))
+                if enrichment:
+                    chapter["reason"] = enrichment.get("reason")
+                    chapter["for"] = enrichment.get("for")
+
+def inject_reasons_and_for_into_selected_data(selected_data, level):
+    render_path = os.path.join("structured_data", f"prereq_render_items_level_{level}.json")
+    if not os.path.exists(render_path):
+        return
+
+    with open(render_path, "r") as f:
+        render_items = json.load(f)
+
+    info_map = {
+        (
+            item.get("subject", "").strip().lower(),
+            item.get("chapter", "").strip().lower()
+        ): {
+            "reason": item.get("reason"),
+            "for": item.get("for")
+        }
+        for item in render_items
+    }
+
+    for class_key, subjects_data in selected_data.items():
+        for subject, chapter_list in subjects_data.items():
+            subj_key = subject.strip().lower()
+            for chapter in chapter_list:
+                chap_key = chapter.get("chapter", "").strip().lower()
+                info = info_map.get((subj_key, chap_key))
+                if info:
+                    if info.get("reason"):
+                        chapter["reason"] = info["reason"]
+                    if info.get("for"):
+                        chapter["for"] = info["for"]
 
 if __name__ == '__main__':
     app.run(debug=True)
