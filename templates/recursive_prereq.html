@@ -8,13 +8,19 @@
   </head>
   <body class="bg-gray-100 min-h-screen p-6">
     <div class="max-w-5xl mx-auto bg-white rounded-lg shadow-md p-8">
-      <h1 class="text-2xl font-bold mb-6 text-center text-gray-800">
-        Select Prerequisites – Level {{ level - 1 }}
+      <!-- Class Number -->
+      <h1 class="text-2xl font-bold mb-4 text-center text-gray-800">
+        Class {{ class_name }}
       </h1>
+
+      <!-- Prereq Level -->
+      <h2 class="text-xl font-semibold mb-6 text-center text-gray-700">
+        Select Prerequisites – Level {{ level - 1 }}
+      </h2>
 
       <!-- Breadcrumb Trail -->
       <div class="mb-6">
-        <h2 class="text-lg font-semibold text-gray-700">Selection History:</h2>
+        <h3 class="text-lg font-semibold text-gray-700">Selection History:</h3>
         <ul class="list-disc list-inside text-sm text-gray-600">
           {% for i in range(1, level) %}
             {% set selected = session['level_' ~ i ~ '_selected'] %}
@@ -39,37 +45,29 @@
           {% endif %}
         {% endfor %}
 
-        <!-- New chapter selection -->
+        <!-- Group chapters under each subject -->
+        {% set grouped = {} %}
         {% for item in prerequisites %}
-        <div class="border p-4 rounded mb-4 bg-gray-50">
-          <h2 class="text-lg font-semibold text-blue-800 mb-1">
-            <input type="checkbox" name="selected_prereq_chapter" value="{{ item.chapter }}" class="mr-2" />
-            {{ item.subject }} – {{ item.number }}. {{ item.chapter }}
-          </h2>
-          <p class="text-sm text-gray-600 italic mb-2">Reason: {{ item.reason }}</p>
+          {% set _ = grouped.setdefault(item.subject, []).append(item) %}
+        {% endfor %}
 
-          {% if item.topics %}
-          <div class="ml-4 mt-2 space-y-3">
-            {% for topic in item.topics %}
-            <div class="border-l-4 border-blue-300 pl-4">
-              <label class="font-medium text-gray-700 block">
-                <input type="checkbox" name="selected_prereq_topic" value="{{ topic.topic }}" class="mr-2" />
-                {{ topic.text }}
-              </label>
-              {% if topic.subtopics %}
-              <div class="ml-6 mt-1 space-y-1 text-sm text-gray-700">
-                {% for sub in topic.subtopics %}
-                <label class="block">
-                  <input type="checkbox" name="selected_prereq_subtopic" value="{{ sub.text }}" class="mr-2" />
-                  {{ sub.text }}
-                </label>
-                {% endfor %}
-              </div>
-              {% endif %}
-            </div>
-            {% endfor %}
+        {% for subject, chapters in grouped.items() %}
+        <div class="mb-6">
+          <h3 class="text-lg font-bold text-blue-800 mb-3">{{ subject }}</h3>
+          {% for item in chapters %}
+          <div class="border p-4 rounded mb-3 bg-gray-50">
+            <label class="text-lg font-semibold text-gray-800 flex items-start">
+              <input
+                type="checkbox"
+                name="selected_prereq_combined"
+                value="{{ item.id }}|||{{ item.chapter }}"
+                class="mr-2 mt-1"
+              />
+              <span>{{ item.number }}. {{ item.chapter }}</span>
+            </label>
+            <p class="text-sm text-gray-600 italic mt-1">Reason: {{ item.reason }}</p>
           </div>
-          {% endif %}
+          {% endfor %}
         </div>
         {% endfor %}
 
@@ -82,60 +80,6 @@
           </button>
         </div>
       </form>
-
-      <!-- <form method="get" action="{{ url_for('generate_questions') }}" class="mt-6 text-center">
-        <button
-          type="submit"
-          class="bg-green-600 hover:bg-green-700 text-white font-semibold px-6 py-2 rounded w-full"
-        >
-          Done – Generate Final Questions
-        </button>
-      </form> -->
     </div>
-</script>
-  <script>
-    document.addEventListener("DOMContentLoaded", function () {
-      // When chapter checkbox is toggled
-      document
-        .querySelectorAll('input[name="selected_prereq_chapter"]')
-        .forEach((chapterCheckbox) => {
-          chapterCheckbox.addEventListener("change", function () {
-            const chapterDiv = chapterCheckbox.closest(".border");
-            if (!chapterDiv) return;
-
-            const topicCheckboxes = chapterDiv.querySelectorAll(
-              'input[name="selected_prereq_topic"]'
-            );
-            const subtopicCheckboxes = chapterDiv.querySelectorAll(
-              'input[name="selected_prereq_subtopic"]'
-            );
-
-            topicCheckboxes.forEach(
-              (cb) => (cb.checked = chapterCheckbox.checked)
-            );
-            subtopicCheckboxes.forEach(
-              (cb) => (cb.checked = chapterCheckbox.checked)
-            );
-          });
-        });
-
-      // When topic checkbox is toggled
-      document
-        .querySelectorAll('input[name="selected_prereq_topic"]')
-        .forEach((topicCheckbox) => {
-          topicCheckbox.addEventListener("change", function () {
-            const topicBlock = topicCheckbox.closest(".border-l-4");
-            if (!topicBlock) return;
-
-            const subtopicCheckboxes = topicBlock.querySelectorAll(
-              'input[name="selected_prereq_subtopic"]'
-            );
-            subtopicCheckboxes.forEach(
-              (cb) => (cb.checked = topicCheckbox.checked)
-            );
-          });
-        });
-    });
-  </script>
   </body>
 </html>

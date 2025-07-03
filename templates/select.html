@@ -8,6 +8,11 @@
   </head>
   <body class="bg-gray-100 min-h-screen p-6">
     <div class="max-w-5xl mx-auto bg-white rounded-lg shadow-md p-8">
+      <!-- Class Number Display -->
+      <div class="text-center text-lg font-semibold text-gray-700 mb-2">
+        Class {{ class_name }}
+      </div>
+
       <h1 class="text-2xl font-bold mb-6 text-center text-gray-800">
         Select Topics for Question Generation
       </h1>
@@ -32,49 +37,17 @@
           </h2>
           {% for chapter in chapters %}
           <div class="border p-4 rounded mb-4 bg-gray-50">
-            <h3 class="text-lg font-semibold text-gray-800">
+            <label
+              class="text-lg font-semibold text-gray-800 flex items-center"
+            >
               <input
                 type="checkbox"
                 name="chapters"
                 value="{{ chapter.chapter }}"
                 class="mr-2"
               />
-              {{ chapter.chapter }}
-            </h3>
-
-            {% if chapter.topics %}
-            <div class="ml-4 mt-2 space-y-3">
-              {% for topic in chapter.topics %}
-              <div class="border-l-4 border-blue-300 pl-4">
-                <label class="font-medium text-gray-700">
-                  <input
-                    type="checkbox"
-                    name="topics"
-                    value="{{ topic.topic }}"
-                    class="mr-2"
-                  />
-                  {{ topic.topic }}
-                </label>
-
-                {% if topic.subtopics %}
-                <div class="ml-6 mt-1 space-y-1 text-sm text-gray-700">
-                  {% for sub in topic.subtopics %}
-                  <label class="block">
-                    <input
-                      type="checkbox"
-                      name="subtopics"
-                      value="{{ sub.text }}"
-                      class="mr-2"
-                    />
-                    {{ sub.text }}
-                  </label>
-                  {% endfor %}
-                </div>
-                {% endif %}
-              </div>
-              {% endfor %}
-            </div>
-            {% endif %}
+              {{ chapter.number }}. {{ chapter.chapter }}
+            </label>
           </div>
           {% endfor %}
         </div>
@@ -141,48 +114,6 @@
     </div>
 
     <script>
-      document.addEventListener("DOMContentLoaded", function () {
-        // When chapter is toggled
-        document
-          .querySelectorAll('input[name="chapters"]')
-          .forEach((chapterCheckbox) => {
-            chapterCheckbox.addEventListener("change", function () {
-              const chapterDiv = chapterCheckbox.closest(".border");
-              if (!chapterDiv) return;
-
-              const topicCheckboxes = chapterDiv.querySelectorAll(
-                'input[name="topics"]'
-              );
-              const subtopicCheckboxes = chapterDiv.querySelectorAll(
-                'input[name="subtopics"]'
-              );
-
-              topicCheckboxes.forEach(
-                (cb) => (cb.checked = chapterCheckbox.checked)
-              );
-              subtopicCheckboxes.forEach(
-                (cb) => (cb.checked = chapterCheckbox.checked)
-              );
-            });
-          });
-
-        // When topic is toggled
-        document
-          .querySelectorAll('input[name="topics"]')
-          .forEach((topicCheckbox) => {
-            topicCheckbox.addEventListener("change", function () {
-              const topicBlock = topicCheckbox.closest(".border-l-4");
-              if (!topicBlock) return;
-
-              const subtopicCheckboxes = topicBlock.querySelectorAll(
-                'input[name="subtopics"]'
-              );
-              subtopicCheckboxes.forEach(
-                (cb) => (cb.checked = topicCheckbox.checked)
-              );
-            });
-          });
-      });
       document
         .getElementById("topicForm")
         .addEventListener("submit", function (e) {
