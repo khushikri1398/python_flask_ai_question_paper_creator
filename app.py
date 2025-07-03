@@ -527,6 +527,11 @@ def build_prerequisite_tree(selected_structure):
     top_class_key = sorted_classes[0]
     result = copy.deepcopy(selected_structure[top_class_key])  # Start with topmost class chapters
 
+    # Add class info to top level chapters
+    for subject, chapters in result.items():
+        for chapter in chapters:
+            chapter["class"] = top_class_key
+
     # Create subject → chapter name → chapter dict map for all classes
     all_chapter_map = {}
     for class_key in selected_structure:
@@ -535,7 +540,9 @@ def build_prerequisite_tree(selected_structure):
             for ch in chapters:
                 ch_name = ch.get("chapter")
                 if ch_name:
-                    all_chapter_map[subject][ch_name] = copy.deepcopy(ch)
+                    ch_copy = copy.deepcopy(ch)
+                    ch_copy["class"] = class_key  # 👈 Add class info
+                    all_chapter_map[subject][ch_name] = ch_copy
 
     # Helper to recursively attach prerequisites
     def attach_prerequisites(subject, chapter_name, current_class_index, visited=None):
@@ -546,7 +553,6 @@ def build_prerequisite_tree(selected_structure):
         visited.add(chapter_name)
 
         prerequisites = []
-        # Look only in lower classes
         for lower_class_index in range(current_class_index + 1, len(sorted_classes)):
             class_key = sorted_classes[lower_class_index]
             chapters = selected_structure.get(class_key, {}).get(subject, [])
@@ -555,17 +561,14 @@ def build_prerequisite_tree(selected_structure):
                 target = ch.get("for")
                 ch_name = ch.get("chapter")
 
-                # Case 1: Chapter explicitly points to current chapter
-                if target == chapter_name:
+                if ch_name in visited:
+                    continue
+
+                if target == chapter_name or not target:
                     ch_copy = copy.deepcopy(ch)
                     ch_copy.pop("for", None)
-                    ch_copy["prerequisites"] = attach_prerequisites(subject, ch_name, lower_class_index, visited)
-                    prerequisites.append(ch_copy)
-
-                # Case 2: No "for" field — assume it applies to all higher chapters
-                elif not target:
-                    ch_copy = copy.deepcopy(ch)
-                    ch_copy["prerequisites"] = attach_prerequisites(subject, ch_name, lower_class_index, visited)
+                    ch_copy["class"] = class_key  # 👈 Add class here too
+                    ch_copy["prerequisites"] = attach_prerequisites(subject, ch_name, lower_class_index, visited.copy())
                     prerequisites.append(ch_copy)
 
         return prerequisites
