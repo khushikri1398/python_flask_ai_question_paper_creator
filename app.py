@@ -237,8 +237,7 @@ def generate_questions():
         return "Error: selected_structure.json not found."
 
     # Load and build tree
-    from app import build_prerequisite_tree_minimal  # if in same file, remove this line
-    tree = build_prerequisite_tree_minimal(selected_structure)
+    tree = build_prerequisite_tree(selected_structure)
 
     # Flatten tree to markdown-style input
     def flatten_tree(chapters, level=0):
@@ -657,7 +656,7 @@ def recursive_prereq(level):
     selected_chapter_names = selected_structure.get("chapters", [])
 
     # LAST LEVEL
-    if level > 3:
+    if level > 1:
         render_path = os.path.join("structured_data", f"prereq_render_items_level_{level - 1}.json")
         if os.path.exists(render_path):
             with open(render_path, "r") as f:
@@ -783,7 +782,7 @@ def recursive_prereq(level):
         with open("structured_data/selected_structure.json", "r") as f:
             selected_structure = json.load(f)
 
-        tree = build_prerequisite_tree_minimal(selected_structure)
+        tree = build_prerequisite_tree(selected_structure)
 
         with open("structured_data/prerequisite_tree.json", "w") as f:
             json.dump(tree, f, indent=2)
@@ -1009,7 +1008,8 @@ def recursive_prereq(level):
     else:
         next_render_items = []
 
-    return render_template("recursive_prereq.html", prerequisites=next_render_items, level=level + 1, class_name=class_name)
+    return render_template("recursive_prereq.html", prerequisites=next_render_items, level=level + 1, class_name=(int(class_name) - level))
+
 def inject_reasons_into_selected_data(selected_data, level):
     render_path = os.path.join("structured_data", f"prereq_render_items_level_{level}.json")
     if not os.path.exists(render_path):
