@@ -1,0 +1,6 @@
+flask
+fpdf
+requests
+python-dotenv
+Pillow
+reportlab
