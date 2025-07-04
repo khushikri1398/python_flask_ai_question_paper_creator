@@ -430,85 +430,125 @@ def download_pdf():
     except Exception as e:
         return f"Error: {str(e)}"
 
-def fetch_structured_previous_year_content(board, class_name, subjects, depth=1, max_depth=3):
+SUBJECT_NAME_MAP_BY_CLASS = {
+    "Mathematics": {
+        "10": "Mathematics",
+        "9": "Maths",
+        "8": "Mathematics",
+        "7": "Mathematics",
+        "6": "Mathematics",
+        "5": "Mathematics",
+        "4": "Maths",
+    }
+}
+
+def fetch_structured_previous_year_content(
+    board,
+    starting_class,
+    current_class,
+    starting_subjects,
+    depth=1,
+    max_depth=3
+):
     if depth > max_depth:
         return {}
 
-    previous_class = str(int(class_name) - 1)
     try:
         response = requests.get(TEXTBOOKS_API)
         response.raise_for_status()
         textbooks = response.json().get('data', {}).get('getBooks', [])
     except requests.RequestException as e:
+        print(f"[ERROR] Failed to fetch textbooks: {e}")
         return {}
 
     full_structure = {}
 
-    for subject in subjects:
-        book = next(
-            (b for b in textbooks if b.get('board') == board and str(b.get('class')) == previous_class and b.get('subject') == subject),
-            None
-        )
-        if not book:
-            continue
+    for start_sub in starting_subjects:
+        found = False
+        for canonical_sub, subject_mapping in SUBJECT_NAME_MAP_BY_CLASS.items():
+            if subject_mapping.get(str(starting_class)) == start_sub:
+                mapped_current_subject = subject_mapping.get(str(current_class))
+                if not mapped_current_subject:
+                    print(f"[WARN] ❌ No mapping found for current_class {current_class} under subject '{canonical_sub}'")
+                    continue
 
-        book_id = book.get("id")
-        try:
-            response = requests.get(f"https://staticapis.pragament.com/textbooks/page_attributes/{book_id}.json")
-            response.raise_for_status()
-            data = response.json()
-        except requests.RequestException as e:
-            continue
+                print(f"[DEBUG] 🎯 Found match for '{start_sub}' in subject group '{canonical_sub}'")
+                print(f"[DEBUG] 🔁 Using mapped subject '{mapped_current_subject}' for class {current_class}")
 
-        chapters = sorted([item for item in data if item.get("type") == "chapter"], key=lambda x: x.get('order', 0))
-        topics = sorted([item for item in data if item.get("type") == "topic"], key=lambda x: x.get('order', 0))
-        subtopics = sorted([item for item in data if item.get("type") == "subtopic"], key=lambda x: x.get('order', 0))
+                # Find the correct book
+                book = next(
+                    (b for b in textbooks if b.get('board') == board and str(b.get('class')) == str(current_class) and b.get('subject') == mapped_current_subject),
+                    None
+                )
+                if not book:
+                    print(f"[WARN] ❌ No book found for subject '{mapped_current_subject}' in class {current_class}")
+                    continue
 
-        def extract_prefix(text):
-            match = re.match(r"^([\d\.]+)", text.strip())
-            return match.group(1) if match else None
+                book_id = book.get("id")
+                try:
+                    response = requests.get(f"https://staticapis.pragament.com/textbooks/page_attributes/{book_id}.json")
+                    response.raise_for_status()
+                    data = response.json()
+                except requests.RequestException as e:
+                    print(f"[ERROR] Failed to fetch book data for '{mapped_current_subject}': {e}")
+                    continue
 
-        topic_prefix_map = {
-            extract_prefix(t.get('text', '')): {
-                "text": t.get("text", ""),
-                "subtopics": []
-            }
-            for t in topics if extract_prefix(t.get('text', ''))
-        }
+                chapters = sorted([item for item in data if item.get("type") == "chapter"], key=lambda x: x.get('order', 0))
+                topics = sorted([item for item in data if item.get("type") == "topic"], key=lambda x: x.get('order', 0))
+                subtopics = sorted([item for item in data if item.get("type") == "subtopic"], key=lambda x: x.get('order', 0))
 
-        subtopic_prefix_map = {
-            extract_prefix(s.get('text', '')): s.get('text', '')
-            for s in subtopics if extract_prefix(s.get('text', ''))
-        }
+                def extract_prefix(text):
+                    match = re.match(r"^([\d\.]+)", text.strip())
+                    return match.group(1) if match else None
 
-        for sub_prefix, sub_text in subtopic_prefix_map.items():
-            parent_prefix = ".".join(sub_prefix.split('.')[:-1])
-            if parent_prefix in topic_prefix_map:
-                topic_prefix_map[parent_prefix]['subtopics'].append({"text": sub_text})
+                topic_prefix_map = {
+                    extract_prefix(t.get('text', '')): {
+                        "text": t.get("text", ""),
+                        "subtopics": []
+                    }
+                    for t in topics if extract_prefix(t.get('text', ''))
+                }
 
-        full_chapter_structure = []
-        for idx, ch in enumerate(chapters, start=1):
-            chapter_prefix = str(idx)
-            chapter_topics = []
-            for topic_prefix, topic_data in topic_prefix_map.items():
-                if topic_prefix.startswith(chapter_prefix + "."):
-                    chapter_topics.append({
-                        "text": topic_data["text"],
-                        "subtopics": topic_data["subtopics"]
+                subtopic_prefix_map = {
+                    extract_prefix(s.get('text', '')): s.get('text', '')
+                    for s in subtopics if extract_prefix(s.get('text', ''))
+                }
+
+                for sub_prefix, sub_text in subtopic_prefix_map.items():
+                    parent_prefix = ".".join(sub_prefix.split('.')[:-1])
+                    if parent_prefix in topic_prefix_map:
+                        topic_prefix_map[parent_prefix]['subtopics'].append({"text": sub_text})
+
+                full_chapter_structure = []
+                for idx, ch in enumerate(chapters, start=1):
+                    chapter_prefix = str(idx)
+                    chapter_topics = []
+                    for topic_prefix, topic_data in topic_prefix_map.items():
+                        if topic_prefix.startswith(chapter_prefix + "."):
+                            chapter_topics.append({
+                                "text": topic_data["text"],
+                                "subtopics": topic_data["subtopics"]
+                            })
+                    full_chapter_structure.append({
+                        "chapter": ch.get("text", ""),
+                        "number": idx,
+                        "topics": chapter_topics
                     })
-            full_chapter_structure.append({
-                "chapter": ch.get("text", ""),
-                "number": idx,
-                "topics": chapter_topics
-            })
 
-        full_structure[subject] = full_chapter_structure
+                # ✅ Store using the original subject name from input
+                full_structure[start_sub] = full_chapter_structure
+                found = True
+                break
+
+        if not found:
+            print(f"[WARN] ⚠️ No previous year mapping found for subject '{start_sub}'")
 
     # Save full_structure to file
     os.makedirs("structured_data", exist_ok=True)
     path = f"structured_data/previous_year_depth_{depth}.json"
     with open(path, "w") as f:
         json.dump(full_structure, f, indent=4)
+
     return full_structure
 
 def build_prerequisite_tree(selected_structure):
@@ -659,7 +699,7 @@ def recursive_prereq(level):
     selected_chapter_names = selected_structure.get("chapters", [])
 
     # LAST LEVEL
-    if level > 1:
+    if level > 3:
         render_path = os.path.join("structured_data", f"prereq_render_items_level_{level - 1}.json")
         if os.path.exists(render_path):
             with open(render_path, "r") as f:
@@ -839,7 +879,7 @@ def recursive_prereq(level):
             previous_year_data = json.load(f)
     else:
         previous_year_data = fetch_structured_previous_year_content(
-            board, str(int(class_name) - level + 1), subjects, depth=level, max_depth=5
+            board, starting_class = class_name, current_class = str(int(class_name) - level), starting_subjects = subjects, depth=level, max_depth=5
         )
 
     chapter_index_map = {
