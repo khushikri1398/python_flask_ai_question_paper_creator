@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Select Prerequisite Chapters</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+  </head>
+  <body class="bg-gray-100 min-h-screen p-6">
+    <div class="max-w-5xl mx-auto bg-white rounded-lg shadow-md p-8">
+      <!-- Class Number -->
+      <h1 class="text-2xl font-bold mb-4 text-center text-gray-800">
+        Class {{ class_name }}
+      </h1>
+
+      <!-- Prereq Level -->
+      <h2 class="text-xl font-semibold mb-6 text-center text-gray-700">
+        Select Prerequisites – Level {{ level - 1 }}
+      </h2>
+
+      <!-- Breadcrumb Trail -->
+      <div class="mb-6">
+        <h3 class="text-lg font-semibold text-gray-700">Selection History:</h3>
+        <ul class="list-disc list-inside text-sm text-gray-600">
+          {% for i in range(1, level) %}
+            {% set selected = session['level_' ~ i ~ '_selected'] %}
+            {% if selected %}
+            <li>
+              <strong>Level {{ i }}:</strong>
+              {{ selected | join(', ') }}
+            </li>
+            {% endif %}
+          {% endfor %}
+        </ul>
+      </div>
+
+      <form method="post" action="{{ url_for('recursive_prereq', level=level) }}" class="space-y-6">
+        <!-- Persist previous selections -->
+        {% for i in range(1, level) %}
+          {% set selected = session['level_' ~ i ~ '_selected'] %}
+          {% if selected %}
+            {% for ch in selected %}
+              <input type="hidden" name="selected_prereq_chapter" value="{{ ch }}">
+            {% endfor %}
+          {% endif %}
+        {% endfor %}
+
+        <!-- Group chapters under each subject -->
+        {% set grouped = {} %}
+        {% for item in prerequisites %}
+          {% set _ = grouped.setdefault(item.subject, []).append(item) %}
+        {% endfor %}
+
+        {% for subject, chapters in grouped.items() %}
+        <div class="mb-6">
+          <h3 class="text-lg font-bold text-blue-800 mb-3">{{ subject }}</h3>
+          {% for item in chapters %}
+          <div class="border p-4 rounded mb-3 bg-gray-50">
+            <label class="text-lg font-semibold text-gray-800 flex items-start">
+              <input
+                type="checkbox"
+                name="selected_prereq_combined"
+                value="{{ item.id }}|||{{ item.chapter }}"
+                class="mr-2 mt-1"
+              />
+              <span>{{ item.number }}. {{ item.chapter }}</span>
+            </label>
+            <p class="text-sm text-gray-600 italic mt-1">Reason: {{ item.reason }}</p>
+          </div>
+          {% endfor %}
+        </div>
+        {% endfor %}
+
+        <div class="text-center mt-6">
+          <button
+            type="submit"
+            class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-2 rounded w-full"
+          >
+            Go Deeper into Prerequisites
+          </button>
+        </div>
+      </form>
+    </div>
+  </body>
+</html>

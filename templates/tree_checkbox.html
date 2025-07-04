@@ -1,0 +1,58 @@
+{% if level is not defined %}
+  {% set level = 0 %}
+{% endif %}
+{% set bg_class = 'bg-gray-50' if level % 2 == 0 else 'bg-gray-100' %}
+{% set border_color_class = [
+  'border-l-blue-500',
+  'border-l-green-500',
+  'border-l-purple-500',
+  'border-l-yellow-500',
+  'border-l-pink-500',
+  'border-l-teal-500'
+][level % 6] %}
+
+<div class="border border-gray-300 rounded p-4 {{ bg_class }} {{ border_color_class }} border-l-4">
+  <label class="flex items-start gap-2">
+    <input
+      type="checkbox"
+      name="selected_prereq_chapter"
+      value="{{ chapter.chapter }}"
+      class="mt-1 chapter-checkbox"
+    />
+    <span class="font-medium text-gray-900 text-lg">
+      {{ chapter.chapter }} (Chapter {{ chapter.number }}) - {{ chapter.class }}
+    </span>
+  </label>
+
+  {% if chapter.reason %}
+    <p class="text-xs text-gray-600 italic mt-1 ml-6">
+      <span class="font-semibold text-gray-700">Reason:</span> {{ chapter.reason }}
+    </p>
+  {% endif %}
+
+  {% if chapter.topics %}
+    <div class="ml-6 mt-2 space-y-2">
+      {% for topic in chapter.topics %}
+        <div class="text-sm text-gray-600 font-medium">{{ topic.topic }}</div>
+        {% if topic.subtopics %}
+          <ul class="ml-4 space-y-1">
+            {% for sub in topic.subtopics %}
+              <li class="text-xs text-gray-500">{{ sub.text }}</li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  {% if chapter.prerequisites %}
+    <div class="ml-6 mt-4 space-y-4">
+      {% for prereq in chapter.prerequisites %}
+        {% set chapter = prereq %}
+        {% set level = level + 1 %}
+        {% include "tree_checkbox.html" with context %}
+        {% set level = level - 1 %}
+      {% endfor %}
+    </div>
+  {% endif %}
+</div>

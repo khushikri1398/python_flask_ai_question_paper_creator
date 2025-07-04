@@ -1,36 +1,62 @@
 <!DOCTYPE html>
-<html>
-<head>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Select Prerequisites</title>
     <script src="https://cdn.tailwindcss.com"></script>
-</head>
-<body class="bg-gray-100 p-6">
-    <div class="max-w-4xl mx-auto bg-white p-6 rounded shadow">
-        <h1 class="text-2xl font-bold mb-4 text-center">Select Prerequisite Topics & Subtopics</h1>
-        <form method="post" action="{{ url_for('finalize_prereq') }}">
-            {% for item in prerequisites %}
-            <div class="border p-4 mb-4 rounded bg-gray-50">
-                <h2 class="text-lg font-semibold text-blue-800">
-                    <input type="checkbox" name="selected_prereq_topic" value="{{ item.topic }}" class="mr-2">
-                    {{ item.topic }}
-                </h2>
-                <p class="text-sm text-gray-600 italic">Reason: {{ item.reason }}</p>
-                <div class="ml-4 mt-2">
-                    {% for sub in item.subtopics %}
-                    <label class="block text-gray-700">
-                        <input type="checkbox" name="selected_prereq_subtopic" value="{{ sub }}" class="mr-2">
-                        {{ sub }}
-                    </label>
-                    {% endfor %}
-                </div>
-            </div>
-            {% endfor %}
-            <div class="text-center">
-                <button type="submit" class="bg-blue-600 text-white px-6 py-2 rounded hover:bg-blue-700">
-                    Proceed to Generate Questions
-                </button>
-            </div>
-        </form>
+  </head>
+  <body class="bg-gray-100 min-h-screen p-6">
+    <div class="max-w-5xl mx-auto bg-white rounded-lg shadow-md p-8">
+      <h1 class="text-2xl font-bold mb-6 text-center text-gray-800">
+        Select Prerequisite Chapters
+      </h1>
+
+      <form method="post" class="space-y-6">
+        {% for item in prerequisites %}
+        <div class="border p-4 rounded mb-4 bg-gray-50">
+          <h2 class="text-lg font-semibold text-blue-800 mb-1">
+            <input
+              type="checkbox"
+              name="selected_prereq_chapter"
+              value="{{ item.chapter }}"
+              class="mr-2"
+            />
+            {{ item.subject }} - {{ item.number }}. {{ item.chapter }}
+          </h2>
+          <p class="text-sm text-gray-600 italic">Reason: {{ item.reason }}</p>
+        </div>
+        {% endfor %}
+
+        <div class="text-center mt-6 flex flex-col gap-4">
+          <button
+            type="submit"
+            class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-2 rounded w-full"
+            onclick="setAction('finalize')"
+          >
+            Proceed to Generate Questions
+          </button>
+
+          <button
+            type="submit"
+            class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold px-6 py-2 rounded w-full"
+            onclick="setAction('recursive')"
+          >
+            Find Prerequisites of These Chapters
+          </button>
+        </div>
+      </form>
     </div>
-</body>
+
+    <script>
+      function setAction(type) {
+        const form = document.querySelector("form");
+        if (type === "finalize") {
+          form.action = "{{ url_for('finalize_prereq') }}";
+        } else if (type === "recursive") {
+          form.action = "{{ url_for('recursive_prereq', level=1) }}";
+        }
+      }
+    </script>
+  </body>
 </html>
