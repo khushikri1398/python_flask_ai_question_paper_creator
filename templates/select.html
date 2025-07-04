@@ -30,6 +30,16 @@
         {% endfor %}
         <input type="hidden" name="step" value="topics" id="stepInput" />
 
+        <div class="text-right mb-4">
+          <button
+            type="button"
+            onclick="selectAllChapters()"
+            class="bg-green-600 hover:bg-green-700 text-white font-semibold px-4 py-2 rounded"
+          >
+            Select All Chapters
+          </button>
+        </div>
+
         {% for subject, chapters in subject_chapter_map.items() %}
         <div>
           <h2 class="text-xl font-semibold text-blue-800 mb-4">
@@ -128,6 +138,11 @@
             }
           }
         });
+
+      function selectAllChapters() {
+        const checkboxes = document.querySelectorAll('input[type="checkbox"][name="chapters"]');
+        checkboxes.forEach(cb => cb.checked = true);
+      }
     </script>
   </body>
 </html>
