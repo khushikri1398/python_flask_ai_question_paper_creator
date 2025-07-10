@@ -16,7 +16,7 @@
     <input
       type="checkbox"
       name="selected_prereq_chapter"
-      value="{{ chapter.chapter }}"
+      value="{{ chapter.chapter }}|{{ chapter.class }}|{{ subject }}"
       class="mt-1 chapter-checkbox"
     />
     <span class="font-medium text-gray-900 text-lg">
@@ -33,11 +33,29 @@
   {% if chapter.topics %}
     <div class="ml-6 mt-2 space-y-2">
       {% for topic in chapter.topics %}
-        <div class="text-sm text-gray-600 font-medium">{{ topic.topic }}</div>
+        <label class="flex items-center gap-2 text-sm text-gray-600 font-medium">
+          <input
+            type="checkbox"
+            name="selected_topics"
+            value="{{ chapter.chapter }}|{{ topic.topic }}|{{ chapter.class }}|{{ subject }}"
+            class="topic-checkbox"
+          />
+          {{ topic.topic }}
+        </label>
         {% if topic.subtopics %}
           <ul class="ml-4 space-y-1">
             {% for sub in topic.subtopics %}
-              <li class="text-xs text-gray-500">{{ sub.text }}</li>
+              <li>
+                <label class="flex items-center gap-2 text-xs text-gray-500">
+                  <input
+                    type="checkbox"
+                    name="selected_subtopics"
+                    value="{{ chapter.chapter }}|{{ topic.topic }}|{{ sub.text }}|{{ chapter.class }}|{{ subject }}"
+                    class="subtopic-checkbox"
+                  />
+                  {{ sub.text }}
+                </label>
+              </li>
             {% endfor %}
           </ul>
         {% endif %}

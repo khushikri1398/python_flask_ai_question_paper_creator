@@ -14,7 +14,7 @@
         Select the prerequisites you'd like to include.
       </p>
 
-      <form action="{{ url_for('generate_questions') }}">
+      <form action="{{ url_for('prepare_selected_data') }}" method="post">
         {% if tree_json %}
         <div class="mb-8">
           {% for class_key, subjects in tree_json.items() %}
@@ -35,6 +35,18 @@
         </div>
         {% endif %}
 
+        <div class="flex items-center mb-4">
+          <input
+            id="show_metadata"
+            name="show_metadata"
+            type="checkbox"
+            class="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+            checked
+          />
+          <label for="show_metadata" class="ml-2 block text-sm text-gray-700">
+            Show Class/Subject/Topic/Subtopic for Each Question
+          </label>
+        </div>
         <div class="flex justify-between mt-10">
           <a
             href="{{ url_for('download_prereqs') }}"
