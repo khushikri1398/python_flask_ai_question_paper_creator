@@ -587,20 +587,31 @@ def select():
 def generate_questions_no_prereq():
     selected_chapters = request.form.getlist('chapters')
     class_name = request.form.get("class")
-    subject = request.form.get("subject")
-    
+    subjects = request.form.getlist("subject")  # allows multiple subjects if needed
+
     # Path to the JSON file
     json_path = os.path.join('structured_data', 'list_of_all_chapters_for_selected_class.json')
     
     with open(json_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
 
-    subject_data = data.get(subject, [])
-    chapters_to_show = [
-        chapter for chapter in subject_data if chapter["chapter"] in selected_chapters
-    ]
+    # Build nested dict: { subject: [chapters...] }
+    subject_chapter_map = {}
+    for subject in subjects:
+        subject_data = data.get(subject, [])
+        filtered_chapters = [
+            chapter for chapter in subject_data if chapter["chapter"] in selected_chapters
+        ]
+        if filtered_chapters:
+            subject_chapter_map[subject] = filtered_chapters
+            
+    print(f"{subject_chapter_map}")
 
-    return render_template('show_selected_chapters.html', chapters=chapters_to_show, class_name=class_name, subject=subject)
+    return render_template(
+        'show_selected_chapters.html',
+        subject_chapter_map=subject_chapter_map,
+        class_name=class_name
+    )
 
 # 2.1.1 Route to handle topic selection for direct question generation (show_selected_chapters.html)
 @app.route('/generate_questions_directly', methods=['POST'])
@@ -808,7 +819,7 @@ def recursive_prereq(level):
     selected_chapter_names = selected_structure.get("chapters", [])
 
     # LAST LEVEL
-    if level > 2:
+    if level > 1:
         render_path = os.path.join("structured_data", f"prereq_render_items_level_{level - 1}.json")
         if os.path.exists(render_path):
             with open(render_path, "r") as f:
