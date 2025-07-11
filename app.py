@@ -819,7 +819,7 @@ def recursive_prereq(level):
     selected_chapter_names = selected_structure.get("chapters", [])
 
     # LAST LEVEL
-    if level > 1:
+    if level > 4:
         render_path = os.path.join("structured_data", f"prereq_render_items_level_{level - 1}.json")
         if os.path.exists(render_path):
             with open(render_path, "r") as f:
