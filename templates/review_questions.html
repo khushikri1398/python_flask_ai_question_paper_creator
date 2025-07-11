@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Review Questions</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 p-6">
+  <form method="POST" action="{{ url_for('finalize_questions') }}">
+    <div class="max-w-5xl mx-auto bg-white p-6 shadow rounded">
+      <h2 class="text-xl font-bold text-gray-800 mb-4">Review and Select Questions</h2>
+
+      {% for q in questions %}
+        <div class="mb-4 p-4 border border-gray-200 rounded bg-gray-50">
+          <label class="flex items-start">
+            <input type="checkbox" name="selected_indexes" value="{{ loop.index0 }}" class="mr-3 mt-1" checked />
+            <div>
+              <p class="font-semibold text-gray-800 mb-1">{{ q.question }}</p>
+              <ul class="list-disc ml-5 text-gray-700">
+                {% for opt in q.options %}
+                  <li>{{ opt }}</li>
+                {% endfor %}
+              </ul>
+              <p class="text-sm mt-2 text-gray-500">Class: {{ q.class }}, Subject: {{ q.subject }}, Chapter: {{ q.chapter }}, Topic: {{ q.topic }}{% if q.subtopic %}, Subtopic: {{ q.subtopic }}{% endif %}</p>
+            </div>
+          </label>
+        </div>
+      {% endfor %}
+
+      <input type="hidden" name="all_questions_json" value='{{ questions | tojson | safe }}'>
+      <div class="text-center mt-6">
+        <button type="submit" class="bg-blue-600 text-white px-6 py-2 rounded font-semibold hover:bg-blue-700">
+          Finalize & Generate PDF
+        </button>
+      </div>
+    </div>
+  </form>
+</body>
+</html>

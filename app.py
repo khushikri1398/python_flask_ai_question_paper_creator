@@ -587,20 +587,31 @@ def select():
 def generate_questions_no_prereq():
     selected_chapters = request.form.getlist('chapters')
     class_name = request.form.get("class")
-    subject = request.form.get("subject")
-    
+    subjects = request.form.getlist("subject")  # allows multiple subjects if needed
+
     # Path to the JSON file
     json_path = os.path.join('structured_data', 'list_of_all_chapters_for_selected_class.json')
     
     with open(json_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
 
-    subject_data = data.get(subject, [])
-    chapters_to_show = [
-        chapter for chapter in subject_data if chapter["chapter"] in selected_chapters
-    ]
+    # Build nested dict: { subject: [chapters...] }
+    subject_chapter_map = {}
+    for subject in subjects:
+        subject_data = data.get(subject, [])
+        filtered_chapters = [
+            chapter for chapter in subject_data if chapter["chapter"] in selected_chapters
+        ]
+        if filtered_chapters:
+            subject_chapter_map[subject] = filtered_chapters
+            
+    print(f"{subject_chapter_map}")
 
-    return render_template('show_selected_chapters.html', chapters=chapters_to_show, class_name=class_name, subject=subject)
+    return render_template(
+        'show_selected_chapters.html',
+        subject_chapter_map=subject_chapter_map,
+        class_name=class_name
+    )
 
 # 2.1.1 Route to handle topic selection for direct question generation (show_selected_chapters.html)
 @app.route('/generate_questions_directly', methods=['POST'])
@@ -744,7 +755,7 @@ def generate_questions_from_direct():
 
     generate_pdf(final_output, "Question.pdf", show_metadata)
 
-    return render_template("result.html", paper_json=final_output, pdf_code="PDF generated successfully.")
+    return render_template("review_questions.html", questions=final_output["questions"])
 
 # 2.2 Route to handle selected chapters for prerequisite selection (recursive_prereq.html)
 @app.route('/generate', methods=['POST'])
@@ -808,7 +819,7 @@ def recursive_prereq(level):
     selected_chapter_names = selected_structure.get("chapters", [])
 
     # LAST LEVEL
-    if level > 2:
+    if level > 4:
         render_path = os.path.join("structured_data", f"prereq_render_items_level_{level - 1}.json")
         if os.path.exists(render_path):
             with open(render_path, "r") as f:
@@ -1339,6 +1350,28 @@ def generate_questions():
 
     generate_pdf(final_output, "Question.pdf", show_metadata)
 
+    return render_template("review_questions.html", questions=final_output["questions"])
+
+# 2.3 Route to review and finalize questions (review_questions.html)
+@app.route('/finalize_questions', methods=['POST'])
+def finalize_questions():
+    selected_indexes = list(map(int, request.form.getlist("selected_indexes")))
+    all_questions_json = request.form["all_questions_json"]
+    all_questions = json.loads(all_questions_json)
+
+    selected_questions = [all_questions[i] for i in selected_indexes]
+
+    if not selected_questions:
+        return "No questions selected."
+
+    final_output = {"questions": selected_questions}
+
+    with open("paper.json", "w") as f:
+        json.dump(final_output, f, indent=2)
+
+    show_metadata = True  # Optional: You can use a hidden input to let the user decide this too
+    generate_pdf(final_output, "Question.pdf", show_metadata)
+
     return render_template("result.html", paper_json=final_output, pdf_code="PDF generated successfully.")
 
 # 3 Route to download the generated PDF (result.html)
@@ -1355,7 +1388,7 @@ def download_pdf():
     except Exception as e:
         return f"Error: {str(e)}"
 
-# IDK what this does
+# (select_prereq.html)
 @app.route('/finalize_prereq', methods=['POST'])
 def finalize_prereq():
     selected_prereq_topics = request.form.getlist("selected_prereq_topic")
