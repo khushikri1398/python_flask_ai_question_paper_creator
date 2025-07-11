@@ -744,7 +744,7 @@ def generate_questions_from_direct():
 
     generate_pdf(final_output, "Question.pdf", show_metadata)
 
-    return render_template("result.html", paper_json=final_output, pdf_code="PDF generated successfully.")
+    return render_template("review_questions.html", questions=final_output["questions"])
 
 # 2.2 Route to handle selected chapters for prerequisite selection (recursive_prereq.html)
 @app.route('/generate', methods=['POST'])
@@ -1339,6 +1339,28 @@ def generate_questions():
 
     generate_pdf(final_output, "Question.pdf", show_metadata)
 
+    return render_template("review_questions.html", questions=final_output["questions"])
+
+# 2.3 Route to review and finalize questions (review_questions.html)
+@app.route('/finalize_questions', methods=['POST'])
+def finalize_questions():
+    selected_indexes = list(map(int, request.form.getlist("selected_indexes")))
+    all_questions_json = request.form["all_questions_json"]
+    all_questions = json.loads(all_questions_json)
+
+    selected_questions = [all_questions[i] for i in selected_indexes]
+
+    if not selected_questions:
+        return "No questions selected."
+
+    final_output = {"questions": selected_questions}
+
+    with open("paper.json", "w") as f:
+        json.dump(final_output, f, indent=2)
+
+    show_metadata = True  # Optional: You can use a hidden input to let the user decide this too
+    generate_pdf(final_output, "Question.pdf", show_metadata)
+
     return render_template("result.html", paper_json=final_output, pdf_code="PDF generated successfully.")
 
 # 3 Route to download the generated PDF (result.html)
@@ -1355,7 +1377,7 @@ def download_pdf():
     except Exception as e:
         return f"Error: {str(e)}"
 
-# IDK what this does
+# (select_prereq.html)
 @app.route('/finalize_prereq', methods=['POST'])
 def finalize_prereq():
     selected_prereq_topics = request.form.getlist("selected_prereq_topic")
