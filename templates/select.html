@@ -63,61 +63,23 @@
         </div>
         {% endfor %}
 
-        <!-- Number Inputs -->
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div>
-            <label class="block text-sm font-medium text-gray-700"
-              >Min questions/topic:</label
-            >
-            <input
-              type="number"
-              name="min_questions"
-              class="w-full border border-gray-300 rounded px-3 py-2"
-            />
-          </div>
-          <div>
-            <label class="block text-sm font-medium text-gray-700"
-              >Max questions/topic:</label
-            >
-            <input
-              type="number"
-              name="max_questions"
-              class="w-full border border-gray-300 rounded px-3 py-2"
-            />
-          </div>
-          <div>
-            <label class="block text-sm font-medium text-gray-700"
-              >Total questions/subject:</label
-            >
-            <input
-              type="number"
-              name="total_questions"
-              class="w-full border border-gray-300 rounded px-3 py-2"
-            />
-          </div>
-        </div>
+        <div class="text-center mt-6 flex gap-4">
+          <!-- New Button -->
+          <button
+            type="button"
+            onclick="submitToNoPrereqRoute()"
+            class="bg-purple-600 hover:bg-purple-700 text-white font-semibold px-6 py-2 rounded w-full"
+          >
+            Generate Questions Without Prerequisites
+          </button>
 
-        <!-- Prerequisite Checkbox -->
-        <div class="flex items-center mt-4">
-          <input
-            type="checkbox"
-            name="prerequisite"
-            value="on"
-            id="prerequisite"
-            class="mr-2"
-          />
-          <label for="prerequisite" class="text-sm text-gray-700">
-            Generate questions only from prerequisite topics
-          </label>
-        </div>
-
-        <div class="text-center mt-6">
+          <!-- Existing Button -->
           <button
             type="submit"
             id="submitBtn"
             class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-2 rounded w-full"
           >
-            Generate JSON & PDF Code
+            See Pre-requisites and Generate Questions
           </button>
         </div>
       </form>
@@ -130,7 +92,7 @@
           const prereq = document.getElementById("prerequisite");
           const stepInput = document.getElementById("stepInput");
 
-          if (prereq.checked) {
+          if (prereq && prereq.checked) {
             if (stepInput.value === "topics") {
               // Let it submit
             } else if (stepInput.value === "questions") {
@@ -142,6 +104,12 @@
       function selectAllChapters() {
         const checkboxes = document.querySelectorAll('input[type="checkbox"][name="chapters"]');
         checkboxes.forEach(cb => cb.checked = true);
+      }
+
+      function submitToNoPrereqRoute() {
+        const form = document.getElementById("topicForm");
+        form.action = "{{ url_for('generate_questions_no_prereq') }}"; // Jinja will render actual route
+        form.submit();
       }
     </script>
   </body>

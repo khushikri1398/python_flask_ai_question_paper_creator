@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Select Topics & Subtopics</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 min-h-screen p-6">
+  <form method="POST" action="{{ url_for('generate_questions_directly') }}">
+    <div class="max-w-5xl mx-auto bg-white p-6 shadow rounded-lg">
+      <h1 class="text-2xl font-bold mb-4 text-center text-gray-800">Select Topics and Subtopics</h1>
+
+      <input type="hidden" name="class_name" value="{{ class_name }}">
+      <input type="hidden" name="subject" value="{{ subject }}">
+
+      {% for chapter in chapters %}
+        <div class="mb-6 border border-gray-200 rounded p-4">
+          <label class="font-semibold text-blue-700 text-lg block">
+            <input
+              type="checkbox"
+              name="selected_chapters"
+              value="{{ chapter.chapter }}|{{ class_name }}|{{ subject }}"
+              class="mr-2"
+            />
+            {{ chapter.number }}. {{ chapter.chapter }}
+          </label>
+
+          {% for topic in chapter.topics %}
+            <div class="ml-6 mt-2">
+              <label class="font-medium text-gray-800 block">
+                <input
+                  type="checkbox"
+                  name="selected_topics"
+                  value="{{ chapter.chapter }}|{{ topic.topic }}|{{ class_name }}|{{ subject }}"
+                  class="mr-2"
+                />
+                {{ topic.topic }}
+              </label>
+
+              {% if topic.subtopics %}
+                <ul class="ml-6 list-disc text-gray-700 mt-1">
+                  {% for sub in topic.subtopics %}
+                    <li>
+                      <label>
+                        <input
+                          type="checkbox"
+                          name="selected_subtopics"
+                          value="{{ chapter.chapter }}|{{ topic.topic }}|{{ sub.text }}|{{ class_name }}|{{ subject }}"
+                          class="mr-2"
+                        />
+                        {{ sub.text }}
+                      </label>
+                    </li>
+                  {% endfor %}
+                </ul>
+              {% endif %}
+            </div>
+          {% endfor %}
+        </div>
+      {% endfor %}
+
+      <!-- Metadata Toggle -->
+      <div class="mt-4">
+        <label class="inline-flex items-center">
+          <input type="checkbox" name="show_metadata" class="mr-2" />
+          Include Class/Subject/Topic/Subtopic metadata in PDF
+        </label>
+      </div>
+
+      <div class="text-center mt-6">
+        <button
+          type="submit"
+          class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-2 rounded"
+        >
+          Generate Questions & PDF
+        </button>
+      </div>
+    </div>
+  </form>
+</body>
+</html>

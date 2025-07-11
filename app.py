@@ -14,142 +14,28 @@ from reportlab.lib import colors
 from reportlab.lib.units import mm
 from collections import defaultdict
 
+
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
 
 
 TEXTBOOKS_API = "https://staticapis.pragament.com/textbooks/allbooks.json"
 
-@app.route('/')
-def index():
-    try:
-        response = requests.get(TEXTBOOKS_API)
-        response.raise_for_status()
-        textbooks = response.json().get('data', {}).get('getBooks', [])
-    except requests.RequestException as e:
-        print(f"Error fetching textbooks: {e}")
-        textbooks = []
-    return render_template('index.html', textbooks=textbooks, textbooks_json=json.dumps(textbooks))
-
-@app.route('/select', methods=['POST'])
-def select():
-    board = request.form.get("board")
-    class_name = request.form.get("class")
-    subjects = request.form.getlist("subject")
-
-    try:
-        response = requests.get(TEXTBOOKS_API)
-        response.raise_for_status()
-        textbooks = response.json().get('data', {}).get('getBooks', [])
-    except requests.RequestException as e:
-        print(f"Error fetching textbooks: {e}")
-        textbooks = []
-
-    subject_chapter_map = {}
-    chapter_number_to_name_map = {}
-
-    def extract_prefix(text):
-        """Extracts numeric prefix like '1.1', '2.1.3' from text."""
-        match = re.match(r"^([\d\.]+)", text.strip())
-        return match.group(1) if match else None
-
-    for subject in subjects:
-        matching_book = next(
-            (book for book in textbooks
-             if book.get('board') == board and str(book.get('class')) == class_name and book.get('subject') == subject),
-            None
-        )
-
-        if not matching_book:
-            print(f"No matching textbook found for subject: {subject}")
-            continue
-
-        book_id = matching_book.get("id")
-        try:
-            response = requests.get(f"https://staticapis.pragament.com/textbooks/page_attributes/{book_id}.json")
-            response.raise_for_status()
-            data = response.json()
-        except requests.RequestException as e:
-            print(f"Error fetching page attributes for {subject}: {e}")
-            continue
-
-        # Separate and sort by order
-        chapters = sorted([item for item in data if item.get("type") == "chapter"], key=lambda x: x.get('order', 0))
-        topics = sorted([item for item in data if item.get("type") == "topic"], key=lambda x: x.get('order', 0))
-        subtopics = sorted([item for item in data if item.get("type") == "subtopic"], key=lambda x: x.get('order', 0))
-
-        # Map prefixes to clean data
-        topic_prefix_map = {
-            extract_prefix(t.get('text', '')): {
-                "text": t.get("text", ""),
-                "subtopics": []
-            }
-            for t in topics if extract_prefix(t.get('text', ''))
-        }
-
-        subtopic_prefix_map = {
-            extract_prefix(s.get('text', '')): s.get('text', '')
-            for s in subtopics if extract_prefix(s.get('text', ''))
-        }
-
-        # Attach subtopics to topics
-        for sub_prefix, sub_text in subtopic_prefix_map.items():
-            parent_prefix = ".".join(sub_prefix.split('.')[:-1])
-            if parent_prefix in topic_prefix_map:
-                topic_prefix_map[parent_prefix]['subtopics'].append({"text": sub_text})
-
-        # Attach topics to chapters
-        final_chapters = []
-        chapter_number_name_map = {}
-
-        for idx, ch in enumerate(chapters, start=1):
-            chapter_prefix = str(idx)
-            chapter_topics = []
-
-            for topic_prefix, topic_data in topic_prefix_map.items():
-                if topic_prefix.startswith(chapter_prefix + "."):
-                    chapter_topics.append({
-                        "text": topic_data["text"],
-                        "subtopics": topic_data["subtopics"]
-                    })
-
-            chapter_name = ch.get("text", "")
-            final_chapters.append({
-                "chapter": chapter_name,
-                "number": idx,
-                "topics": [
-                    {
-                        "topic": t["text"],
-                        "subtopics": t["subtopics"]
-                    } for t in chapter_topics
-                ]
-            })
-
-            # Map chapter number to name
-            chapter_number_name_map[idx] = chapter_name
-
-        subject_chapter_map[subject] = final_chapters
-        chapter_number_to_name_map[subject] = chapter_number_name_map
-
-    # Create folder if it doesn't exist
-    output_folder = "structured_data"
-    os.makedirs(output_folder, exist_ok=True)
-    output_path = os.path.join(output_folder, "list_of_all_chapters_for_selected_class.json")
-
-    # Save structured data to file
-    with open(output_path, "w") as f:
-        json.dump(subject_chapter_map, f, indent=4)
+SUBJECT_NAME_MAP_BY_CLASS = {
+    "Mathematics": {
+        "10": "Mathematics",
+        "9": "Maths",
+        "8": "Mathematics",
+        "7": "Mathematics",
+        "6": "Mathematics",
+        "5": "Mathematics",
+        "4": "Maths",
+    }
+}
 
 
-    # Store only chapter number-name map in session
-    session['chapter_number_to_name_map'] = chapter_number_to_name_map
+# ------------------------------- Functions -------------------------------
 
-    return render_template('select.html',
-                           board=board,
-                           class_name=class_name,
-                           subjects=subjects,
-                           subject_chapter_map=subject_chapter_map)
-    
 def normalize_chapter_structure(chapter):
     normalized_topics = []
     for topic in chapter.get("topics", []):
@@ -168,455 +54,6 @@ def normalize_chapter_structure(chapter):
         "reason": chapter.get("reason"),
         "for": chapter.get("for")
     }
-
-@app.route('/generate', methods=['POST'])
-def generate():
-    # Step 1: Get form data
-    board = request.form.get("board")
-    class_name = request.form.get("class")
-    subjects = request.form.getlist("subject")
-    chapters = request.form.getlist("chapters")
-
-    # Save the selected structure to a file for later use (for recursive_prereq)
-    output_folder = "structured_data"
-    os.makedirs(output_folder, exist_ok=True)
-    selected_structure_path = os.path.join(output_folder, "selected_structure.json")
-    # Structure: { class_<class>: { subject: [chapter_objects] } }
-    selected_structure = {
-        f"class_{class_name}": {}
-    }
-    for subject in subjects:
-        selected_structure[f"class_{class_name}"][subject] = []
-    # For each selected chapter, try to get the full chapter object from list_of_all_chapters_for_selected_class.json
-    chapters_data_path = os.path.join(output_folder, "list_of_all_chapters_for_selected_class.json")
-    if os.path.exists(chapters_data_path):
-        with open(chapters_data_path, "r") as f:
-            all_chapters_by_subject = json.load(f)
-    else:
-        all_chapters_by_subject = {}
-    for subject in subjects:
-        subject_chapters = all_chapters_by_subject.get(subject, [])
-        for ch_name in chapters:
-            matched = next((ch for ch in subject_chapters if ch.get("chapter") == ch_name), None)
-            if matched and matched not in selected_structure[f"class_{class_name}"][subject]:
-                selected_structure[f"class_{class_name}"][subject].append(normalize_chapter_structure(matched))
-    with open(selected_structure_path, "w") as f:
-        json.dump(selected_structure, f, indent=4)
-
-    # Store for recursive prerequisite route (minimal session usage)
-    session['form_data'] = {
-        "board": board,
-        "class": class_name,
-        "subjects": subjects,
-        "chapters": chapters
-    }
-    # Redirect to recursive prerequisite route (start at level 1)
-    return redirect(url_for("recursive_prereq", level=1))
-
-@app.route('/finalize_prereq', methods=['POST'])
-def finalize_prereq():
-    selected_prereq_topics = request.form.getlist("selected_prereq_topic")
-    selected_prereq_subtopics = request.form.getlist("selected_prereq_subtopic")
-
-    if not selected_prereq_topics and not selected_prereq_subtopics:
-        return "Error: Please select at least one prerequisite topic or subtopic."
-
-    session['prereq_only'] = {
-        "topics": selected_prereq_topics,
-        "subtopics": selected_prereq_subtopics
-    }
-
-    return redirect(url_for("generate_questions"))
-
-# @app.route('/generate_questions')
-# def generate_questions():
-#     # Load selected structure
-#     try:
-#         with open("structured_data/selected_structure.json", "r") as f:
-#             selected_structure = json.load(f)
-#     except FileNotFoundError:
-#         return "Error: selected_structure.json not found."
-
-#     # Load and build tree
-#     tree = build_prerequisite_tree(selected_structure)
-
-#     # Flatten tree to markdown-style input
-#     def flatten_tree(chapters, level=0):
-#         lines = []
-#         for ch in chapters:
-#             prefix = "  " * level + "- "
-#             line = f"{prefix}{ch['chapter']} (Chapter {ch['number']}, {ch['class']})"
-#             if "reason" in ch:
-#                 line += f"\n{'  ' * (level + 1)}Reason: {ch['reason']}"
-#             lines.append(line)
-#             if ch.get("prerequisites"):
-#                 lines.extend(flatten_tree(ch["prerequisites"], level + 1))
-#         return lines
-
-#     flat_lines = []
-#     for class_key, subject_map in tree.items():
-#         for subject, chapters in subject_map.items():
-#             flat_lines.append(f"## {subject} - {class_key}")
-#             flat_lines.extend(flatten_tree(chapters, 1))
-
-#     prerequisite_text = "\n".join(flat_lines)
-
-#     # Basic metadata for prompt
-#     class_name = list(selected_structure.keys())[0].replace("class_", "")
-#     subjects = list(selected_structure[list(selected_structure.keys())[0]].keys())
-
-#     min_questions = request.args.get("min_questions", "1")
-#     max_questions = request.args.get("max_questions", "2")
-#     total_questions = request.args.get("total_questions", "10")
-
-#     prompt_data = {
-#         "task": "Generate multiple-choice questions",
-#         "class": class_name,
-#         "subjects": subjects,
-#         "prerequisites": prerequisite_text,
-#         "min_questions": min_questions,
-#         "max_questions": max_questions,
-#         "total_questions": total_questions
-#     }
-
-#     system_prompt = (
-#         "You are an AI that only responds with valid JSON. "
-#         "Do not include any explanations or natural language text. "
-#         "Just return a JSON object with the format:\n"
-#         "{ 'class': '8', 'subject': ['Mathematics'], 'questions': [ { 'question': ..., 'options': [...], 'correct_answer': ... } ] }\n"
-#         f"Generate exactly {total_questions} MCQs based on the prerequisite context provided below."
-#     )
-
-#     ollama_prompt = f"{system_prompt}\n\n---\n\n{json.dumps(prompt_data, indent=2)}"
-
-#     try:
-#         result = subprocess.run(["ollama", "run", "llama3"], input=ollama_prompt, capture_output=True, text=True, timeout=1000000)
-#         output = result.stdout.strip()
-#         print("Ollama Output:", output)
-#         paper_json = json.loads(output[output.find('{'):output.rfind('}') + 1]) if output else {}
-#         if not paper_json.get("questions"):
-#             return "Error: Ollama did not return valid questions. Please retry."
-#     except Exception as e:
-#         return f"Error: Could not generate questions. Details: {str(e)}"
-
-#     with open("paper.json", "w") as f:
-#         json.dump(paper_json, f)
-
-#     generate_pdf(paper_json, "Question.pdf")
-
-#     return render_template('result.html', paper_json=paper_json, pdf_code="PDF generated successfully.")
-
-@app.route('/generate_questions')
-def generate_questions():
-    
-    show_metadata = request.args.get("show_metadata") == "on"
-    
-    try:
-        with open("structured_data/prepared_selected_data.json", "r") as f:
-            selected_data = json.load(f)
-    except FileNotFoundError:
-        return "Error: prepared_selected_data.json not found."
-
-    all_questions = []
-
-    # Step 1: Build grouped targets like (class, subject) → [items]
-    grouped_targets = []
-    for class_key in sorted(selected_data.keys()):
-        for subject in sorted(selected_data[class_key].keys()):
-            flat_items = []
-            chapters = selected_data[class_key][subject]
-
-            for chapter, content in chapters.items():
-                topics = content.get("topics", {})
-                for topic, subtopics in topics.items():
-                    if subtopics:
-                        for subtopic in subtopics:
-                            flat_items.append({"topic": topic, "subtopic": subtopic})
-                    else:
-                        flat_items.append({"topic": topic, "subtopic": None})
-
-            if flat_items:
-                grouped_targets.append({
-                    "class": class_key,
-                    "subject": subject,
-                    "items": flat_items
-                })
-
-    # Step 2: Loop over each (class, subject) group and generate separately
-    system_prompt = (
-        "You are an AI that only responds with valid JSON. "
-        "Do not include any natural language or explanations. "
-        "For each item below, generate exactly 1 multiple-choice question.\n"
-        "Each question must include:\n"
-        "- 'question': the question string\n"
-        "- 'options': a list of 4 string options, each starting with a number (e.g., '1. Option A')\n"
-        "- 'correct_option': the correct option number (1 to 4), not the answer text\n"
-        "- 'class', 'subject', 'topic', 'subtopic': include all as metadata (set subtopic to null if not applicable)\n\n"
-        "Respond in this format:\n"
-        "{ \"questions\": [ { \"class\": ..., \"subject\": ..., \"topic\": ..., \"subtopic\": ..., \"question\": ..., \"options\": [...], \"correct_option\": 1 }, ... ] }"
-    )
-
-    for group in grouped_targets:
-        class_key = group["class"]
-        subject = group["subject"]
-        items = group["items"]
-
-        user_prompt = {
-            "task": "Generate 1 MCQ per topic/subtopic",
-            "class": class_key,
-            "subject": subject,
-            "items": items
-        }
-
-        full_prompt = f"{system_prompt}\n\n---\n\n{json.dumps(user_prompt, indent=2)}"
-
-        try:
-            result = subprocess.run(
-                ["ollama", "run", "llama3"],
-                input=full_prompt,
-                capture_output=True,
-                text=True,
-                timeout=300
-            )
-
-            output = result.stdout.strip()
-            print(f"\nOllama Output for {class_key} > {subject}:\n", output[:300], "..." if len(output) > 300 else "")
-
-            json_start = output.find("{")
-            json_end = output.rfind("}") + 1
-            if json_start != -1 and json_end != -1:
-                output_json = json.loads(output[json_start:json_end])
-                questions = output_json.get("questions", [])
-                all_questions.extend(questions)
-            else:
-                print(f"⚠️ Warning: Invalid JSON returned for {class_key} > {subject}")
-
-        except Exception as e:
-            print(f"❌ Error generating for {class_key} > {subject}: {e}")
-
-    if not all_questions:
-        return "Error: No questions generated."
-
-    final_output = {"questions": all_questions}
-
-    with open("paper.json", "w") as f:
-        json.dump(final_output, f, indent=2)
-
-    generate_pdf(final_output, "Question.pdf", show_metadata)
-
-    return render_template("result.html", paper_json=final_output, pdf_code="PDF generated successfully.")
-
-@app.route('/prepare_selected_data', methods=['POST'])
-def prepare_selected_data():
-    # Existing logic to build selected_data...
-    selected_chapters = request.form.getlist("selected_prereq_chapter")
-    selected_topics = request.form.getlist("selected_topics")
-    selected_subtopics = request.form.getlist("selected_subtopics")
-
-    # New: Get show_metadata value (will be 'on' if checked)
-    show_metadata = request.form.get("show_metadata", "off")
-
-    # Build and save data (same as you have)
-    def nested_dict():
-        return defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: {"topics": defaultdict(list)})))
-
-    prepared_data = nested_dict()
-
-    def parse_parts(item, expected_parts):
-        parts = item.split('|')
-        if len(parts) != expected_parts:
-            return None
-        return parts
-
-    for item in selected_chapters:
-        parsed = parse_parts(item, 3)
-        if not parsed:
-            continue
-        chapter, class_name, subject = parsed
-        _ = prepared_data[class_name][subject][chapter]["topics"]
-
-    for item in selected_topics:
-        parsed = parse_parts(item, 4)
-        if not parsed:
-            continue
-        chapter, topic, class_name, subject = parsed
-        _ = prepared_data[class_name][subject][chapter]["topics"][topic]
-
-    for item in selected_subtopics:
-        parsed = parse_parts(item, 5)
-        if not parsed:
-            continue
-        chapter, topic, subtopic, class_name, subject = parsed
-        prepared_data[class_name][subject][chapter]["topics"][topic].append(subtopic)
-
-    final_data = json.loads(json.dumps(prepared_data))
-    os.makedirs("structured_data", exist_ok=True)
-    with open("structured_data/prepared_selected_data.json", "w") as f:
-        json.dump(final_data, f, indent=2)
-
-    # Pass metadata flag as query param
-    return redirect(url_for("generate_questions", show_metadata=show_metadata))
-
-def generate_pdf(data, output_pdf, show_metadata=True):
-    from fpdf import FPDF
-    import os
-
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_auto_page_break(auto=True, margin=15)
-
-    font_path = os.path.join("fonts", "DejaVuSans.ttf")
-    if not os.path.exists(font_path):
-        raise FileNotFoundError(f"Font file not found at {font_path}. Please add DejaVuSans.ttf to the 'fonts' folder.")
-
-    pdf.add_font("DejaVu", "", font_path, uni=True)
-    pdf.set_font("DejaVu", size=12)
-
-    pdf.cell(200, 10, txt="Generated Question Paper", ln=1, align='C')
-    pdf.ln(5)
-
-    for idx, q in enumerate(data.get("questions", []), start=1):
-        if(show_metadata):
-            tag_line = f"[Class: {q.get('class')}] [Subject: {q.get('subject')}] [Topic: {q.get('topic')}]"
-            if q.get("subtopic"):
-                tag_line += f" [Subtopic: {q.get('subtopic')}]"
-            pdf.multi_cell(0, 10, txt=tag_line)
-            pdf.ln(1)
-
-        pdf.multi_cell(0, 10, txt=f"{idx}. {q.get('question')}")
-        pdf.ln(2)
-
-        for opt in q.get("options", []):
-            pdf.cell(0, 10, txt=opt, ln=1)
-
-        correct_num = q.get("correct_option")
-        correct_text = (
-            q["options"][correct_num - 1]
-            if correct_num and 1 <= correct_num <= len(q["options"])
-            else "N/A"
-        )
-        pdf.set_text_color(0, 128, 0)
-        pdf.cell(0, 10, txt=f"Correct Answer: {correct_text}", ln=1)
-        pdf.set_text_color(0, 0, 0)
-        pdf.ln(6)
-
-    pdf.output(output_pdf)
-
-def generate_prerequisite_pdf(tree):
-    buffer = io.BytesIO()
-    c = canvas.Canvas(buffer, pagesize=A4)
-    width, height = A4
-
-    margin_left = 30
-    margin_right = 30
-    margin_top = 40
-    margin_bottom = 40
-
-    y = height - margin_top
-    line_height = 22
-    max_indent = 80
-    sidebar_width = 5
-
-    background_colors = [colors.whitesmoke, colors.lightgrey]
-    sidebar_colors = [
-        colors.red, colors.orange, colors.green, 
-        colors.cadetblue, colors.purple, colors.brown, colors.teal
-    ]
-
-    line_counter = 0  # for background color alternation
-
-    def draw_text_block(text, level, font="Helvetica", font_size=11):
-        nonlocal y, line_counter
-
-        if y < margin_bottom + line_height:
-            c.showPage()
-            y = height - margin_top
-            line_counter = 0  # reset background alternation
-
-        indent = min(level * 20, max_indent)
-        x_pos = margin_left + indent + sidebar_width + 5
-
-        # Draw background band
-        bg_color = background_colors[line_counter % 2]
-        c.setFillColor(bg_color)
-        c.rect(margin_left, y - line_height + 4, width - margin_left - margin_right, line_height, fill=1, stroke=0)
-
-        # Draw left color sidebar
-        sidebar_color = sidebar_colors[level % len(sidebar_colors)]
-        c.setFillColor(sidebar_color)
-        c.rect(margin_left, y - line_height + 4, sidebar_width, line_height, fill=1, stroke=0)
-
-        # Draw text
-        c.setFillColor(colors.black)
-        c.setFont(font, font_size)
-        c.drawString(x_pos, y, text)
-
-        y -= line_height
-        line_counter += 1
-
-    def draw_chapters(chapters, level=0):
-        for chapter in chapters:
-            chapter_text = f"{chapter['chapter']} (Chapter {chapter['number']}, {chapter['class']})"
-            draw_text_block(chapter_text, level, font="Helvetica-Bold", font_size=12)
-
-            if "reason" in chapter:
-                reason_text = f"Reason: {chapter['reason']}"
-                draw_text_block(reason_text, level + 1, font="Helvetica-Oblique", font_size=10)
-
-            if chapter.get("prerequisites"):
-                draw_chapters(chapter["prerequisites"], level + 1)
-
-    for class_key, subjects in tree.items():
-        for subject, chapters in subjects.items():
-            heading_text = f"{subject} - {class_key}"
-            draw_text_block(heading_text, 0, font="Helvetica-Bold", font_size=14)
-            draw_chapters(chapters, level=1)
-            y -= line_height // 2  # small space between subjects
-
-    c.save()
-    buffer.seek(0)
-    return buffer
-
-@app.route('/download_prereqs')
-def download_prereqs():
-    try:
-        with open("structured_data/prerequisite_tree.json", "r") as f:
-            tree = json.load(f)
-    except FileNotFoundError:
-        return "Prerequisite tree not found", 404
-
-    pdf_buffer = generate_prerequisite_pdf(tree)
-    return send_file(
-        pdf_buffer,
-        as_attachment=True,
-        download_name="Prerequisite_Tree.pdf",
-        mimetype="application/pdf"
-    )
-
-@app.route('/download_pdf')
-def download_pdf():
-    try:
-        with open("paper.json", "r") as f:
-            paper_json = json.load(f)
-        if not paper_json.get("questions"):
-            return "Error: No questions available."
-        if not os.path.exists("Question.pdf"):
-            generate_pdf(paper_json, "Question.pdf")
-        return send_file("Question.pdf", as_attachment=True)
-    except Exception as e:
-        return f"Error: {str(e)}"
-
-SUBJECT_NAME_MAP_BY_CLASS = {
-    "Mathematics": {
-        "10": "Mathematics",
-        "9": "Maths",
-        "8": "Mathematics",
-        "7": "Mathematics",
-        "6": "Mathematics",
-        "5": "Mathematics",
-        "4": "Maths",
-    }
-}
 
 def fetch_structured_previous_year_content(
     board,
@@ -858,7 +295,503 @@ def build_prerequisite_tree_minimal(selected_structure):
 
     return result
 
-# --- Recursive Prerequisite Route ---
+def generate_pdf(data, output_pdf, show_metadata=True):
+    from fpdf import FPDF
+    import os
+
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_auto_page_break(auto=True, margin=15)
+
+    font_path = os.path.join("fonts", "DejaVuSans.ttf")
+    if not os.path.exists(font_path):
+        raise FileNotFoundError(f"Font file not found at {font_path}. Please add DejaVuSans.ttf to the 'fonts' folder.")
+
+    pdf.add_font("DejaVu", "", font_path, uni=True)
+    pdf.set_font("DejaVu", size=12)
+
+    pdf.cell(200, 10, txt="Generated Question Paper", ln=1, align='C')
+    pdf.ln(5)
+
+    for idx, q in enumerate(data.get("questions", []), start=1):
+        if(show_metadata):
+            tag_line = f"[Class: {q.get('class')}] [Subject: {q.get('subject')}] [Chapter: {q.get('chapter')}] [Topic: {q.get('topic')}]"
+            if q.get("subtopic"):
+                tag_line += f" [Subtopic: {q.get('subtopic')}]"
+            pdf.multi_cell(0, 10, txt=tag_line)
+            pdf.ln(1)
+
+        pdf.multi_cell(0, 10, txt=f"{idx}. {q.get('question')}")
+        pdf.ln(2)
+
+        for opt in q.get("options", []):
+            pdf.cell(0, 10, txt=opt, ln=1)
+
+        correct_num = q.get("correct_option")
+        correct_text = (
+            q["options"][correct_num - 1]
+            if correct_num and 1 <= correct_num <= len(q["options"])
+            else "N/A"
+        )
+        pdf.set_text_color(0, 128, 0)
+        pdf.cell(0, 10, txt=f"Correct Answer: {correct_text}", ln=1)
+        pdf.set_text_color(0, 0, 0)
+        pdf.ln(6)
+
+    pdf.output(output_pdf)
+
+def generate_prerequisite_pdf(tree):
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+
+    margin_left = 30
+    margin_right = 30
+    margin_top = 40
+    margin_bottom = 40
+
+    y = height - margin_top
+    line_height = 22
+    max_indent = 80
+    sidebar_width = 5
+
+    background_colors = [colors.whitesmoke, colors.lightgrey]
+    sidebar_colors = [
+        colors.red, colors.orange, colors.green, 
+        colors.cadetblue, colors.purple, colors.brown, colors.teal
+    ]
+
+    line_counter = 0  # for background color alternation
+
+    def draw_text_block(text, level, font="Helvetica", font_size=11):
+        nonlocal y, line_counter
+
+        if y < margin_bottom + line_height:
+            c.showPage()
+            y = height - margin_top
+            line_counter = 0  # reset background alternation
+
+        indent = min(level * 20, max_indent)
+        x_pos = margin_left + indent + sidebar_width + 5
+
+        # Draw background band
+        bg_color = background_colors[line_counter % 2]
+        c.setFillColor(bg_color)
+        c.rect(margin_left, y - line_height + 4, width - margin_left - margin_right, line_height, fill=1, stroke=0)
+
+        # Draw left color sidebar
+        sidebar_color = sidebar_colors[level % len(sidebar_colors)]
+        c.setFillColor(sidebar_color)
+        c.rect(margin_left, y - line_height + 4, sidebar_width, line_height, fill=1, stroke=0)
+
+        # Draw text
+        c.setFillColor(colors.black)
+        c.setFont(font, font_size)
+        c.drawString(x_pos, y, text)
+
+        y -= line_height
+        line_counter += 1
+
+    def draw_chapters(chapters, level=0):
+        for chapter in chapters:
+            chapter_text = f"{chapter['chapter']} (Chapter {chapter['number']}, {chapter['class']})"
+            draw_text_block(chapter_text, level, font="Helvetica-Bold", font_size=12)
+
+            if "reason" in chapter:
+                reason_text = f"Reason: {chapter['reason']}"
+                draw_text_block(reason_text, level + 1, font="Helvetica-Oblique", font_size=10)
+
+            if chapter.get("prerequisites"):
+                draw_chapters(chapter["prerequisites"], level + 1)
+
+    for class_key, subjects in tree.items():
+        for subject, chapters in subjects.items():
+            heading_text = f"{subject} - {class_key}"
+            draw_text_block(heading_text, 0, font="Helvetica-Bold", font_size=14)
+            draw_chapters(chapters, level=1)
+            y -= line_height // 2  # small space between subjects
+
+    c.save()
+    buffer.seek(0)
+    return buffer
+
+def inject_reasons_into_selected_data(selected_data, level):
+    render_path = os.path.join("structured_data", f"prereq_render_items_level_{level}.json")
+    if not os.path.exists(render_path):
+        return
+
+    with open(render_path, "r") as f:
+        render_items = json.load(f)
+
+    # Use (subject, chapter, for) as key for better granularity
+    enriched_map = {
+        (
+            (item.get("subject") or "").strip().lower(),
+            (item.get("chapter") or "").strip().lower(),
+            (item.get("for") or "").strip().lower()
+        ): {
+            "reason": item.get("reason"),
+            "for": item.get("for")
+        }
+        for item in render_items
+    }
+
+    for class_key, subjects_data in selected_data.items():
+        for subject, chapter_list in subjects_data.items():
+            subj_key = subject.strip().lower()
+            for chapter in chapter_list:
+                chap_key = (chapter.get("chapter" )or "").strip().lower()
+                for_key = (chapter.get("for") or "").strip().lower()
+                
+                enrichment = enriched_map.get((subj_key, chap_key, for_key))
+                if enrichment:
+                    chapter["reason"] = enrichment.get("reason")
+                    chapter["for"] = enrichment.get("for")
+
+# ------------------------------- Routes ----------------------------------
+
+# 1. Home route to display textbooks (index.html)
+@app.route('/')
+def index():
+    try:
+        response = requests.get(TEXTBOOKS_API)
+        response.raise_for_status()
+        textbooks = response.json().get('data', {}).get('getBooks', [])
+    except requests.RequestException as e:
+        print(f"Error fetching textbooks: {e}")
+        textbooks = []
+    return render_template('index.html', textbooks=textbooks, textbooks_json=json.dumps(textbooks))
+
+# 2. Route to handle main selection (select.html)
+@app.route('/select', methods=['POST'])
+def select():
+    board = request.form.get("board")
+    class_name = request.form.get("class")
+    subjects = request.form.getlist("subject")
+
+    try:
+        response = requests.get(TEXTBOOKS_API)
+        response.raise_for_status()
+        textbooks = response.json().get('data', {}).get('getBooks', [])
+    except requests.RequestException as e:
+        print(f"Error fetching textbooks: {e}")
+        textbooks = []
+
+    subject_chapter_map = {}
+    chapter_number_to_name_map = {}
+
+    def extract_prefix(text):
+        """Extracts numeric prefix like '1.1', '2.1.3' from text."""
+        match = re.match(r"^([\d\.]+)", text.strip())
+        return match.group(1) if match else None
+
+    for subject in subjects:
+        matching_book = next(
+            (book for book in textbooks
+             if book.get('board') == board and str(book.get('class')) == class_name and book.get('subject') == subject),
+            None
+        )
+
+        if not matching_book:
+            print(f"No matching textbook found for subject: {subject}")
+            continue
+
+        book_id = matching_book.get("id")
+        try:
+            response = requests.get(f"https://staticapis.pragament.com/textbooks/page_attributes/{book_id}.json")
+            response.raise_for_status()
+            data = response.json()
+        except requests.RequestException as e:
+            print(f"Error fetching page attributes for {subject}: {e}")
+            continue
+
+        # Separate and sort by order
+        chapters = sorted([item for item in data if item.get("type") == "chapter"], key=lambda x: x.get('order', 0))
+        topics = sorted([item for item in data if item.get("type") == "topic"], key=lambda x: x.get('order', 0))
+        subtopics = sorted([item for item in data if item.get("type") == "subtopic"], key=lambda x: x.get('order', 0))
+
+        # Map prefixes to clean data
+        topic_prefix_map = {
+            extract_prefix(t.get('text', '')): {
+                "text": t.get("text", ""),
+                "subtopics": []
+            }
+            for t in topics if extract_prefix(t.get('text', ''))
+        }
+
+        subtopic_prefix_map = {
+            extract_prefix(s.get('text', '')): s.get('text', '')
+            for s in subtopics if extract_prefix(s.get('text', ''))
+        }
+
+        # Attach subtopics to topics
+        for sub_prefix, sub_text in subtopic_prefix_map.items():
+            parent_prefix = ".".join(sub_prefix.split('.')[:-1])
+            if parent_prefix in topic_prefix_map:
+                topic_prefix_map[parent_prefix]['subtopics'].append({"text": sub_text})
+
+        # Attach topics to chapters
+        final_chapters = []
+        chapter_number_name_map = {}
+
+        for idx, ch in enumerate(chapters, start=1):
+            chapter_prefix = str(idx)
+            chapter_topics = []
+
+            for topic_prefix, topic_data in topic_prefix_map.items():
+                if topic_prefix.startswith(chapter_prefix + "."):
+                    chapter_topics.append({
+                        "text": topic_data["text"],
+                        "subtopics": topic_data["subtopics"]
+                    })
+
+            chapter_name = ch.get("text", "")
+            final_chapters.append({
+                "chapter": chapter_name,
+                "number": idx,
+                "topics": [
+                    {
+                        "topic": t["text"],
+                        "subtopics": t["subtopics"]
+                    } for t in chapter_topics
+                ]
+            })
+
+            # Map chapter number to name
+            chapter_number_name_map[idx] = chapter_name
+
+        subject_chapter_map[subject] = final_chapters
+        chapter_number_to_name_map[subject] = chapter_number_name_map
+
+    # Create folder if it doesn't exist
+    output_folder = "structured_data"
+    os.makedirs(output_folder, exist_ok=True)
+    output_path = os.path.join(output_folder, "list_of_all_chapters_for_selected_class.json")
+
+    # Save structured data to file
+    with open(output_path, "w") as f:
+        json.dump(subject_chapter_map, f, indent=4)
+
+
+    # Store only chapter number-name map in session
+    session['chapter_number_to_name_map'] = chapter_number_to_name_map
+
+    return render_template('select.html',
+                           board=board,
+                           class_name=class_name,
+                           subjects=subjects,
+                           subject_chapter_map=subject_chapter_map)
+
+# 2.1 Route to handle topic selection for direct question generation (show_selected_chapters.html)
+@app.route('/generate_questions_no_prereq', methods=['POST'])
+def generate_questions_no_prereq():
+    selected_chapters = request.form.getlist('chapters')
+    class_name = request.form.get("class")
+    subject = request.form.get("subject")
+    
+    # Path to the JSON file
+    json_path = os.path.join('structured_data', 'list_of_all_chapters_for_selected_class.json')
+    
+    with open(json_path, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+
+    subject_data = data.get(subject, [])
+    chapters_to_show = [
+        chapter for chapter in subject_data if chapter["chapter"] in selected_chapters
+    ]
+
+    return render_template('show_selected_chapters.html', chapters=chapters_to_show, class_name=class_name, subject=subject)
+
+# 2.1.1 Route to handle topic selection for direct question generation (show_selected_chapters.html)
+@app.route('/generate_questions_directly', methods=['POST'])
+def generate_questions_directly():
+    selected_chapters = request.form.getlist("selected_chapters")
+    selected_topics = request.form.getlist("selected_topics")
+    selected_subtopics = request.form.getlist("selected_subtopics")
+    show_metadata = request.form.get("show_metadata", "off")
+
+    def nested_dict():
+        return defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: {"topics": defaultdict(list)})))
+
+    prepared_data = nested_dict()
+
+    def parse_parts(item, expected_parts):
+        parts = item.split('|')
+        return parts if len(parts) == expected_parts else None
+
+    for item in selected_chapters:
+        parsed = parse_parts(item, 3)
+        if parsed:
+            chapter, class_name, subject = parsed
+            _ = prepared_data[class_name][subject][chapter]["topics"]
+
+    for item in selected_topics:
+        parsed = parse_parts(item, 4)
+        if parsed:
+            chapter, topic, class_name, subject = parsed
+            _ = prepared_data[class_name][subject][chapter]["topics"][topic]
+
+    for item in selected_subtopics:
+        parsed = parse_parts(item, 5)
+        if parsed:
+            chapter, topic, subtopic, class_name, subject = parsed
+            prepared_data[class_name][subject][chapter]["topics"][topic].append(subtopic)
+
+    final_data = json.loads(json.dumps(prepared_data))
+    os.makedirs("structured_data", exist_ok=True)
+
+    with open("structured_data/prepared_selected_data_direct.json", "w") as f:
+        json.dump(final_data, f, indent=2)
+
+    return redirect(url_for("generate_questions_from_direct", show_metadata=show_metadata))
+
+# 2.1.2 Route to handle direct question generation from selected topics (result.html)
+@app.route('/generate_questions_from_direct')
+def generate_questions_from_direct():
+    show_metadata = request.args.get("show_metadata") == "on"
+
+    try:
+        with open("structured_data/prepared_selected_data_direct.json", "r") as f:
+            selected_data = json.load(f)
+    except FileNotFoundError:
+        return "Error: prepared_selected_data_direct.json not found."
+
+    all_questions = []
+    grouped_targets = []
+
+    for class_key in sorted(selected_data.keys()):
+        for subject in sorted(selected_data[class_key].keys()):
+            flat_items = []
+            for chapter, content in selected_data[class_key][subject].items():
+                topics = content.get("topics", {})
+                for topic, subtopics in topics.items():
+                    if subtopics:
+                        for subtopic in subtopics:
+                            flat_items.append({
+                                "class": class_key,
+                                "subject": subject,
+                                "chapter": chapter,
+                                "topic": topic,
+                                "subtopic": subtopic
+                            })
+                    else:
+                        flat_items.append({
+                            "class": class_key,
+                            "subject": subject,
+                            "chapter": chapter,
+                            "topic": topic,
+                            "subtopic": None
+                        })
+
+            if flat_items:
+                grouped_targets.append({
+                    "class": class_key,
+                    "subject": subject,
+                    "items": flat_items
+                })
+
+    system_prompt = (
+        "You are an AI that only responds with valid JSON. "
+        "Do not include any natural language or explanations.\n\n"
+        "For each item below, generate exactly 1 multiple-choice question based on the class and chapter context.\n"
+        "Each question must include:\n"
+        "- 'question': the question string\n"
+        "- 'options': a list of 4 string options, each starting with a number (e.g., '1. Option A')\n"
+        "- 'correct_option': the correct option number (1 to 4), not the answer text\n"
+        "- 'class', 'subject', 'chapter', 'topic', 'subtopic': include all as metadata (set subtopic to null if not applicable)\n\n"
+        "Respond in this format:\n"
+        "{ \"questions\": [ { \"class\": ..., \"subject\": ..., \"chapter\": ..., \"topic\": ..., \"subtopic\": ..., \"question\": ..., \"options\": [...], \"correct_option\": 1 }, ... ] }"
+    )
+
+    for group in grouped_targets:
+        class_key = group["class"]
+        subject = group["subject"]
+        items = group["items"]
+
+        user_prompt = {
+            "task": "Generate 1 MCQ per topic/subtopic using class difficulty and chapter context",
+            "class": class_key,
+            "subject": subject,
+            "items": items
+        }
+
+        full_prompt = f"{system_prompt}\n\n---\n\n{json.dumps(user_prompt, indent=2)}"
+
+        try:
+            result = subprocess.run(
+                ["ollama", "run", "llama3"],
+                input=full_prompt,
+                capture_output=True,
+                text=True,
+                timeout=300
+            )
+            output = result.stdout.strip()
+            json_start = output.find("{")
+            json_end = output.rfind("}") + 1
+            if json_start != -1 and json_end != -1:
+                output_json = json.loads(output[json_start:json_end])
+                all_questions.extend(output_json.get("questions", []))
+        except Exception as e:
+            print(f"❌ Error generating for {class_key} > {subject}: {e}")
+
+    if not all_questions:
+        return "Error: No questions generated."
+
+    final_output = {"questions": all_questions}
+
+    with open("paper.json", "w") as f:
+        json.dump(final_output, f, indent=2)
+
+    generate_pdf(final_output, "Question.pdf", show_metadata)
+
+    return render_template("result.html", paper_json=final_output, pdf_code="PDF generated successfully.")
+
+# 2.2 Route to handle selected chapters for prerequisite selection (recursive_prereq.html)
+@app.route('/generate', methods=['POST'])
+def generate():
+    # Step 1: Get form data
+    board = request.form.get("board")
+    class_name = request.form.get("class")
+    subjects = request.form.getlist("subject")
+    chapters = request.form.getlist("chapters")
+
+    # Save the selected structure to a file for later use (for recursive_prereq)
+    output_folder = "structured_data"
+    os.makedirs(output_folder, exist_ok=True)
+    selected_structure_path = os.path.join(output_folder, "selected_structure.json")
+    # Structure: { class_<class>: { subject: [chapter_objects] } }
+    selected_structure = {
+        f"class_{class_name}": {}
+    }
+    for subject in subjects:
+        selected_structure[f"class_{class_name}"][subject] = []
+    # For each selected chapter, try to get the full chapter object from list_of_all_chapters_for_selected_class.json
+    chapters_data_path = os.path.join(output_folder, "list_of_all_chapters_for_selected_class.json")
+    if os.path.exists(chapters_data_path):
+        with open(chapters_data_path, "r") as f:
+            all_chapters_by_subject = json.load(f)
+    else:
+        all_chapters_by_subject = {}
+    for subject in subjects:
+        subject_chapters = all_chapters_by_subject.get(subject, [])
+        for ch_name in chapters:
+            matched = next((ch for ch in subject_chapters if ch.get("chapter") == ch_name), None)
+            if matched and matched not in selected_structure[f"class_{class_name}"][subject]:
+                selected_structure[f"class_{class_name}"][subject].append(normalize_chapter_structure(matched))
+    with open(selected_structure_path, "w") as f:
+        json.dump(selected_structure, f, indent=4)
+
+    # Store for recursive prerequisite route (minimal session usage)
+    session['form_data'] = {
+        "board": board,
+        "class": class_name,
+        "subjects": subjects,
+        "chapters": chapters
+    }
+    # Redirect to recursive prerequisite route (start at level 1)
+    return redirect(url_for("recursive_prereq", level=1))
+
+# 2.2.1 Route to handle recursive prerequisite selection (recursive_prereq.html)
 @app.route('/recursive_prereq/<int:level>', methods=['GET', 'POST'])
 def recursive_prereq(level):
     board = session.get("form_data", {}).get("board")
@@ -1229,38 +1162,214 @@ def recursive_prereq(level):
 
     return render_template("recursive_prereq.html", prerequisites=next_render_items, level=level + 1, class_name=(int(class_name) - level))
 
-def inject_reasons_into_selected_data(selected_data, level):
-    render_path = os.path.join("structured_data", f"prereq_render_items_level_{level}.json")
-    if not os.path.exists(render_path):
-        return
+# 2.2.2 Route to prepare selected data for question generation (next_step.html)
+@app.route('/prepare_selected_data', methods=['POST'])
+def prepare_selected_data():
+    # Existing logic to build selected_data...
+    selected_chapters = request.form.getlist("selected_prereq_chapter")
+    selected_topics = request.form.getlist("selected_topics")
+    selected_subtopics = request.form.getlist("selected_subtopics")
 
-    with open(render_path, "r") as f:
-        render_items = json.load(f)
+    # New: Get show_metadata value (will be 'on' if checked)
+    show_metadata = request.form.get("show_metadata", "off")
 
-    # Use (subject, chapter, for) as key for better granularity
-    enriched_map = {
-        (
-            (item.get("subject") or "").strip().lower(),
-            (item.get("chapter") or "").strip().lower(),
-            (item.get("for") or "").strip().lower()
-        ): {
-            "reason": item.get("reason"),
-            "for": item.get("for")
+    # Build and save data (same as you have)
+    def nested_dict():
+        return defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: {"topics": defaultdict(list)})))
+
+    prepared_data = nested_dict()
+
+    def parse_parts(item, expected_parts):
+        parts = item.split('|')
+        if len(parts) != expected_parts:
+            return None
+        return parts
+
+    for item in selected_chapters:
+        parsed = parse_parts(item, 3)
+        if not parsed:
+            continue
+        chapter, class_name, subject = parsed
+        _ = prepared_data[class_name][subject][chapter]["topics"]
+
+    for item in selected_topics:
+        parsed = parse_parts(item, 4)
+        if not parsed:
+            continue
+        chapter, topic, class_name, subject = parsed
+        _ = prepared_data[class_name][subject][chapter]["topics"][topic]
+
+    for item in selected_subtopics:
+        parsed = parse_parts(item, 5)
+        if not parsed:
+            continue
+        chapter, topic, subtopic, class_name, subject = parsed
+        prepared_data[class_name][subject][chapter]["topics"][topic].append(subtopic)
+
+    final_data = json.loads(json.dumps(prepared_data))
+    os.makedirs("structured_data", exist_ok=True)
+    with open("structured_data/prepared_selected_data.json", "w") as f:
+        json.dump(final_data, f, indent=2)
+
+    # Pass metadata flag as query param
+    return redirect(url_for("generate_questions", show_metadata=show_metadata))
+
+# 2.2.2.1 Route to download prerequisite tree as PDF (next_step.html)
+@app.route('/download_prereqs')
+def download_prereqs():
+    try:
+        with open("structured_data/prerequisite_tree.json", "r") as f:
+            tree = json.load(f)
+    except FileNotFoundError:
+        return "Prerequisite tree not found", 404
+
+    pdf_buffer = generate_prerequisite_pdf(tree)
+    return send_file(
+        pdf_buffer,
+        as_attachment=True,
+        download_name="Prerequisite_Tree.pdf",
+        mimetype="application/pdf"
+    )
+
+# 2.2.2.2 Route to generate questions based on selected data (result.html)
+@app.route('/generate_questions')
+def generate_questions():
+    show_metadata = request.args.get("show_metadata") == "on"
+
+    try:
+        with open("structured_data/prepared_selected_data.json", "r") as f:
+            selected_data = json.load(f)
+    except FileNotFoundError:
+        return "Error: prepared_selected_data.json not found."
+
+    all_questions = []
+    grouped_targets = []
+
+    for class_key in sorted(selected_data.keys()):
+        for subject in sorted(selected_data[class_key].keys()):
+            flat_items = []
+            chapters = selected_data[class_key][subject]
+
+            for chapter, content in chapters.items():
+                topics = content.get("topics", {})
+                for topic, subtopics in topics.items():
+                    if subtopics:
+                        for subtopic in subtopics:
+                            flat_items.append({
+                                "class": class_key,
+                                "subject": subject,
+                                "chapter": chapter,
+                                "topic": topic,
+                                "subtopic": subtopic
+                            })
+                    else:
+                        flat_items.append({
+                            "class": class_key,
+                            "subject": subject,
+                            "chapter": chapter,
+                            "topic": topic,
+                            "subtopic": None
+                        })
+
+            if flat_items:
+                grouped_targets.append({
+                    "class": class_key,
+                    "subject": subject,
+                    "items": flat_items
+                })
+
+    system_prompt = (
+        "You are an AI that only responds with valid JSON. "
+        "Do not include any natural language or explanations.\n\n"
+        "For each item below, generate exactly 1 multiple-choice question using context from class, subject, and chapter.\n"
+        "Each question must include:\n"
+        "- 'question': the question string\n"
+        "- 'options': a list of 4 string options, each starting with a number (e.g., '1. Option A')\n"
+        "- 'correct_option': the correct option number (1 to 4), not the answer text\n"
+        "- 'class', 'subject', 'chapter', 'topic', 'subtopic': include all as metadata (set subtopic to null if not applicable)\n\n"
+        "Respond in this format:\n"
+        "{ \"questions\": [ { \"class\": ..., \"subject\": ..., \"chapter\": ..., \"topic\": ..., \"subtopic\": ..., \"question\": ..., \"options\": [...], \"correct_option\": 1 }, ... ] }"
+    )
+
+    for group in grouped_targets:
+        class_key = group["class"]
+        subject = group["subject"]
+        items = group["items"]
+
+        user_prompt = {
+            "task": "Generate 1 MCQ per topic/subtopic using class and chapter context",
+            "class": class_key,
+            "subject": subject,
+            "items": items
         }
-        for item in render_items
+
+        full_prompt = f"{system_prompt}\n\n---\n\n{json.dumps(user_prompt, indent=2)}"
+
+        try:
+            result = subprocess.run(
+                ["ollama", "run", "llama3"],
+                input=full_prompt,
+                capture_output=True,
+                text=True,
+                timeout=300
+            )
+
+            output = result.stdout.strip()
+            print(f"\nOllama Output for {class_key} > {subject}:\n", output[:300], "..." if len(output) > 300 else "")
+
+            json_start = output.find("{")
+            json_end = output.rfind("}") + 1
+            if json_start != -1 and json_end != -1:
+                output_json = json.loads(output[json_start:json_end])
+                questions = output_json.get("questions", [])
+                all_questions.extend(questions)
+            else:
+                print(f"⚠️ Warning: Invalid JSON returned for {class_key} > {subject}")
+
+        except Exception as e:
+            print(f"❌ Error generating for {class_key} > {subject}: {e}")
+
+    if not all_questions:
+        return "Error: No questions generated."
+
+    final_output = {"questions": all_questions}
+
+    with open("paper.json", "w") as f:
+        json.dump(final_output, f, indent=2)
+
+    generate_pdf(final_output, "Question.pdf", show_metadata)
+
+    return render_template("result.html", paper_json=final_output, pdf_code="PDF generated successfully.")
+
+# 3 Route to download the generated PDF (result.html)
+@app.route('/download_pdf')
+def download_pdf():
+    try:
+        with open("paper.json", "r") as f:
+            paper_json = json.load(f)
+        if not paper_json.get("questions"):
+            return "Error: No questions available."
+        if not os.path.exists("Question.pdf"):
+            generate_pdf(paper_json, "Question.pdf")
+        return send_file("Question.pdf", as_attachment=True)
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+# IDK what this does
+@app.route('/finalize_prereq', methods=['POST'])
+def finalize_prereq():
+    selected_prereq_topics = request.form.getlist("selected_prereq_topic")
+    selected_prereq_subtopics = request.form.getlist("selected_prereq_subtopic")
+
+    if not selected_prereq_topics and not selected_prereq_subtopics:
+        return "Error: Please select at least one prerequisite topic or subtopic."
+
+    session['prereq_only'] = {
+        "topics": selected_prereq_topics,
+        "subtopics": selected_prereq_subtopics
     }
 
-    for class_key, subjects_data in selected_data.items():
-        for subject, chapter_list in subjects_data.items():
-            subj_key = subject.strip().lower()
-            for chapter in chapter_list:
-                chap_key = (chapter.get("chapter" )or "").strip().lower()
-                for_key = (chapter.get("for") or "").strip().lower()
-                
-                enrichment = enriched_map.get((subj_key, chap_key, for_key))
-                if enrichment:
-                    chapter["reason"] = enrichment.get("reason")
-                    chapter["for"] = enrichment.get("for")
+    return redirect(url_for("generate_questions"))
 
 if __name__ == '__main__':
     app.run(debug=True)
