@@ -73,6 +73,13 @@
           >
             Invert Selection
           </button>
+          <button
+            type="button"
+            onclick="selectUniqueChaptersByName()"
+            class="bg-blue-100 hover:bg-blue-200 text-blue-800 px-4 py-2 rounded text-sm w-full border border-blue-300"
+          >
+            Select Unique Chapters
+          </button>
         </div>
 
         <!-- Section: Selection Memory -->
@@ -356,6 +363,41 @@
         alert(
           "Selection remembered. Further changes will affect only remembered checkboxes."
         );
+      }
+    </script>
+    <script>
+      function selectUniqueChaptersByName() {
+        const seen = new Set();
+
+        const chapterCheckboxes = document.querySelectorAll(
+          "input.chapter-checkbox[data-depth]"
+        );
+
+        chapterCheckboxes.forEach(cb => {
+          const label = cb.closest("label");
+          const chapterText = label?.textContent?.trim();
+          if (!chapterText) return;
+
+          if (seen.has(chapterText)) {
+            // Deselect if duplicate
+            cb.checked = false;
+            const container = cb.closest(".border");
+            if (container) {
+              container.querySelectorAll("input[type='checkbox']").forEach(child => {
+                child.checked = false;
+              });
+            }
+          } else {
+            seen.add(chapterText);
+            cb.checked = true;
+            const container = cb.closest(".border");
+            if (container) {
+              container.querySelectorAll("input[type='checkbox']").forEach(child => {
+                child.checked = true;
+              });
+            }
+          }
+        });
       }
     </script>
   </body>
