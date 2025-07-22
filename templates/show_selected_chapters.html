@@ -40,8 +40,10 @@
               >
                 <input
                   type="checkbox"
+                  selected_chapters
                   class="mr-2 chapter-checkbox"
                   data-chapter-id="{{ chapter_uid }}"
+                  value="{{ chapter.number }}|{{ class_name }}|{{ subject }}"
                 />
                 {{ chapter.number }}. {{ chapter.chapter }}
               </label>
@@ -52,9 +54,11 @@
                 <label class="font-medium text-gray-800 flex items-center">
                   <input
                     type="checkbox"
+                    name="selected_topics"
                     class="mr-2 topic-checkbox"
                     data-chapter-id="{{ chapter_uid }}"
                     data-topic-id="{{ topic_uid }}"
+                    value="{{ chapter.number }}|{{ topic.topic }}|{{ class_name }}|{{ subject }}"
                   />
                   {{ topic.topic }}
                 </label>
@@ -65,9 +69,11 @@
                   <label class="flex items-center text-gray-700">
                     <input
                       type="checkbox"
+                      name="selected_subtopics"
                       class="mr-2 subtopic-checkbox"
                       data-chapter-id="{{ chapter_uid }}"
                       data-topic-id="{{ topic_uid }}"
+                      value="{{ chapter.number }}|{{ topic.topic }}|{{ sub.text }}|{{ class_name }}|{{ subject }}"
                     />
                     {{ sub.text }}
                   </label>

@@ -36,6 +36,10 @@ SUBJECT_NAME_MAP_BY_CLASS = {
 
 # ------------------------------- Functions -------------------------------
 
+def strip_number_prefix(option):
+    """Strips a leading number and period (e.g. '1. ') from the option."""
+    return re.sub(r'^\s*\d+\.\s*', '', option.strip())
+
 def normalize_chapter_structure(chapter):
     normalized_topics = []
     for topic in chapter.get("topics", []):
@@ -294,6 +298,77 @@ def build_prerequisite_tree_minimal(selected_structure):
             result[top_class_key][subject].append(ch_entry)
 
     return result
+
+def verify_answer_with_models(question_obj):
+    models = ["llama3", "gemma3:1b", "gemma2:2b"]
+    responses = []
+    model_outputs = {}
+
+    def get_answer_from_model(model_name, prompt_text):
+        try:
+            print(f"🔍 Running model: {model_name}")
+            result = subprocess.run(
+                ["ollama", "run", model_name],
+                input=prompt_text,
+                capture_output=True,
+                text=True,
+                timeout=180
+            )
+            answer = result.stdout.strip().lower()
+            print(f"✅ Answer from {model_name}: {answer}")
+            return answer
+        except Exception as e:
+            print(f"❌ Error verifying with model {model_name}: {e}")
+            return None
+
+    options = [opt.strip() for opt in question_obj["options"]]
+    question_text = question_obj["question"]
+
+    # Strip leading option numbering (e.g., '1. ') if present
+    stripped_options = []
+    for opt in options:
+        if opt[:2].isdigit() and opt[2:3] in ['.', ')']:
+            stripped_options.append(opt[3:].strip())
+        else:
+            stripped_options.append(opt)
+
+    # Construct prompt with numbered stripped options
+    prompt = f"Question: {question_text}\nOptions:\n"
+    for idx, opt in enumerate(stripped_options, 1):
+        prompt += f"{idx}. {opt}\n"
+    prompt += "\nRespond only with the correct option number (e.g., 1, 2, 3, 4). No explanation, text, or punctuation."
+
+    print(f"\n📤 Prompt sent to models:\n{prompt}\n")
+
+    for idx, model in enumerate(models):
+        answer = get_answer_from_model(model, prompt)
+        model_outputs[model] = answer
+        if answer and answer.strip().isdigit():
+            responses.append(int(answer.strip()))
+
+    print(f"\n📥 All model responses: {responses}")
+
+    match_counts = {}
+    for resp in responses:
+        match_counts[resp] = match_counts.get(resp, 0) + 1
+
+    if match_counts:
+        most_common = max(match_counts.items(), key=lambda x: x[1])
+        if most_common[1] >= 2:
+            question_obj["correct_option"] = most_common[0]
+            question_obj["verified"] = True
+            print(f"✅ Final verdict: Verified ✅ — Correct option: {most_common[0]}")
+        else:
+            question_obj["verified"] = False
+            print("⚠️ Final verdict: Not Verified — All models gave different answers ❌")
+    else:
+        question_obj["verified"] = False
+        print("❌ Final verdict: Not Verified — No valid numeric responses from models")
+
+    # Store what each model said for frontend visibility
+    question_obj["model_responses"] = model_outputs
+
+    print("------------------------------------------------------")
 
 def generate_pdf(data, output_pdf, show_metadata=True):
     from fpdf import FPDF
@@ -627,7 +702,7 @@ def generate_questions_directly():
     prepared_data = nested_dict()
 
     def parse_parts(item, expected_parts):
-        parts = item.split('|')
+        parts = [p.strip() for p in item.split('|')]
         return parts if len(parts) == expected_parts else None
 
     for item in selected_chapters:
@@ -648,15 +723,23 @@ def generate_questions_directly():
             chapter, topic, subtopic, class_name, subject = parsed
             prepared_data[class_name][subject][chapter]["topics"][topic].append(subtopic)
 
+    # print("🟢 selected_chapters:", request.form.getlist("selected_chapters"))
+    # print("🟢 selected_topics:", request.form.getlist("selected_topics"))
+    # print("🟢 selected_subtopics:", request.form.getlist("selected_subtopics"))
+
+    # print(f"📦 Prepared data structure: {pprint.pformat(prepared_data)}")
+
     final_data = json.loads(json.dumps(prepared_data))
     os.makedirs("structured_data", exist_ok=True)
+    
+    # print(f"📦 Final data structure: {pprint.pformat(final_data)}")
 
     with open("structured_data/prepared_selected_data_direct.json", "w") as f:
         json.dump(final_data, f, indent=2)
 
     return redirect(url_for("generate_questions_from_direct", show_metadata=show_metadata))
 
-# 2.1.2 Route to handle direct question generation from selected topics (result.html)
+# 2.1.2 Route to generate questions directly from selected topics (result.html)
 @app.route('/generate_questions_from_direct')
 def generate_questions_from_direct():
     show_metadata = request.args.get("show_metadata") == "on"
@@ -702,15 +785,19 @@ def generate_questions_from_direct():
                 })
 
     system_prompt = (
-        "You are an AI that only responds with valid JSON. "
-        "Do not include any natural language or explanations.\n\n"
-        "For each item below, generate exactly 1 multiple-choice question based on the class and chapter context.\n"
+        "You are a JSON-only AI. Return strictly valid JSON only. Do NOT include explanations or natural language.\n\n"
+        "You are tasked with creating 1 high-quality multiple choice question per topic or subtopic, considering the following:\n"
+        "- The question must reflect the difficulty and knowledge level appropriate for the given class (grade level).\n"
+        "- Use the chapter name as the primary context.\n"
+        "- For subjects like 'Mathematics', ensure questions are **numerical, formula-based, or calculation-oriented**. Avoid generic or theory-based questions.\n"
+        "- For theoretical subjects like 'Biology', 'History', or 'Civics', focus on **conceptual understanding** but avoid vague or overly general questions.\n"
+        "- Do NOT repeat topics or give trivial questions.\n\n"
         "Each question must include:\n"
         "- 'question': the question string\n"
-        "- 'options': a list of 4 string options, each starting with a number (e.g., '1. Option A')\n"
-        "- 'correct_option': the correct option number (1 to 4), not the answer text\n"
-        "- 'class', 'subject', 'chapter', 'topic', 'subtopic': include all as metadata (set subtopic to null if not applicable)\n\n"
-        "Respond in this format:\n"
+        "- 'options': a list of 4 strings, each starting with a number and a period (e.g., '1. 32 cm')\n"
+        "- 'correct_option': the correct option number (1 to 4), not the text\n"
+        "- 'class', 'subject', 'chapter', 'topic', 'subtopic': included as metadata (subtopic can be null)\n\n"
+        "Your entire response must be in this format:\n"
         "{ \"questions\": [ { \"class\": ..., \"subject\": ..., \"chapter\": ..., \"topic\": ..., \"subtopic\": ..., \"question\": ..., \"options\": [...], \"correct_option\": 1 }, ... ] }"
     )
 
@@ -741,7 +828,10 @@ def generate_questions_from_direct():
             json_end = output.rfind("}") + 1
             if json_start != -1 and json_end != -1:
                 output_json = json.loads(output[json_start:json_end])
-                all_questions.extend(output_json.get("questions", []))
+                questions = output_json.get("questions", [])
+                for q in questions:
+                    verify_answer_with_models(q)
+                all_questions.extend(questions)
         except Exception as e:
             print(f"❌ Error generating for {class_key} > {subject}: {e}")
 
@@ -819,7 +909,7 @@ def recursive_prereq(level):
     selected_chapter_names = selected_structure.get("chapters", [])
 
     # LAST LEVEL
-    if level > 4:
+    if level > 3:
         render_path = os.path.join("structured_data", f"prereq_render_items_level_{level - 1}.json")
         if os.path.exists(render_path):
             with open(render_path, "r") as f:
@@ -1290,17 +1380,22 @@ def generate_questions():
                 })
 
     system_prompt = (
-        "You are an AI that only responds with valid JSON. "
-        "Do not include any natural language or explanations.\n\n"
-        "For each item below, generate exactly 1 multiple-choice question using context from class, subject, and chapter.\n"
+        "You are a JSON-only AI. Return strictly valid JSON only. Do NOT include explanations or natural language.\n\n"
+        "You are tasked with creating 1 high-quality multiple choice question per topic or subtopic, considering the following:\n"
+        "- The question must reflect the difficulty and knowledge level appropriate for the given class (grade level).\n"
+        "- Use the chapter name as the primary context.\n"
+        "- For subjects like 'Mathematics', ensure questions are **numerical, formula-based, or calculation-oriented**. Avoid generic or theory-based questions.\n"
+        "- For theoretical subjects like 'Biology', 'History', or 'Civics', focus on **conceptual understanding** but avoid vague or overly general questions.\n"
+        "- Do NOT repeat topics or give trivial questions.\n\n"
         "Each question must include:\n"
         "- 'question': the question string\n"
-        "- 'options': a list of 4 string options, each starting with a number (e.g., '1. Option A')\n"
-        "- 'correct_option': the correct option number (1 to 4), not the answer text\n"
-        "- 'class', 'subject', 'chapter', 'topic', 'subtopic': include all as metadata (set subtopic to null if not applicable)\n\n"
-        "Respond in this format:\n"
+        "- 'options': a list of 4 strings, each starting with a number and a period (e.g., '1. 32 cm')\n"
+        "- 'correct_option': the correct option number (1 to 4), not the text\n"
+        "- 'class', 'subject', 'chapter', 'topic', 'subtopic': included as metadata (subtopic can be null)\n\n"
+        "Your entire response must be in this format:\n"
         "{ \"questions\": [ { \"class\": ..., \"subject\": ..., \"chapter\": ..., \"topic\": ..., \"subtopic\": ..., \"question\": ..., \"options\": [...], \"correct_option\": 1 }, ... ] }"
     )
+
 
     for group in grouped_targets:
         class_key = group["class"]
@@ -1326,13 +1421,13 @@ def generate_questions():
             )
 
             output = result.stdout.strip()
-            print(f"\nOllama Output for {class_key} > {subject}:\n", output[:300], "..." if len(output) > 300 else "")
-
             json_start = output.find("{")
             json_end = output.rfind("}") + 1
             if json_start != -1 and json_end != -1:
                 output_json = json.loads(output[json_start:json_end])
                 questions = output_json.get("questions", [])
+                for q in questions:
+                    verify_answer_with_models(q)
                 all_questions.extend(questions)
             else:
                 print(f"⚠️ Warning: Invalid JSON returned for {class_key} > {subject}")

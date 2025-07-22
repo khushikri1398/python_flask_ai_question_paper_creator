@@ -11,17 +11,40 @@
       <h2 class="text-xl font-bold text-gray-800 mb-4">Review and Select Questions</h2>
 
       {% for q in questions %}
-        <div class="mb-4 p-4 border border-gray-200 rounded bg-gray-50">
+        {% set card_bg = "bg-green-50 border-green-300" if q.verified == true else "bg-red-50 border-red-300" if q.verified == false else "bg-gray-50 border-gray-200" %}
+        <div class="mb-4 p-4 border rounded {{ card_bg }}">
           <label class="flex items-start">
             <input type="checkbox" name="selected_indexes" value="{{ loop.index0 }}" class="mr-3 mt-1" checked />
             <div>
               <p class="font-semibold text-gray-800 mb-1">{{ q.question }}</p>
-              <ul class="list-disc ml-5 text-gray-700">
+              <div class="ml-5 text-gray-700 space-y-1">
                 {% for opt in q.options %}
-                  <li>{{ opt }}</li>
+                  <p>{{ opt }}</p>
                 {% endfor %}
-              </ul>
-              <p class="text-sm mt-2 text-gray-500">Class: {{ q.class }}, Subject: {{ q.subject }}, Chapter: {{ q.chapter }}, Topic: {{ q.topic }}{% if q.subtopic %}, Subtopic: {{ q.subtopic }}{% endif %}</p>
+              </div>
+
+              {% if q.verified == true %}
+                <p class="text-green-700 font-semibold mt-2">
+                  Correct Answer: {{ q.correct_option }}
+                </p>
+              {% elif q.verified == false %}
+                <p class="text-red-700 font-semibold mt-2">Model Suggestions:</p>
+                <ul class="ml-5 list-disc text-red-600 text-sm">
+                  {% for model_name, answer in q.model_responses.items() %}
+                    <li>{{ model_name }}: {{ answer }}</li>
+                  {% endfor %}
+                </ul>
+              {% else %}
+                <p class="text-gray-500 text-sm mt-2 italic">Not verified yet.</p>
+              {% endif %}
+
+              <p class="text-sm mt-2 text-gray-500">
+                Class: {{ q.class }},
+                Subject: {{ q.subject }},
+                Chapter: {{ q.chapter }},
+                Topic: {{ q.topic }}
+                {% if q.subtopic %}, Subtopic: {{ q.subtopic }}{% endif %}
+              </p>
             </div>
           </label>
         </div>
