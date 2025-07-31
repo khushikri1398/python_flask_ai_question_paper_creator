@@ -13,7 +13,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.units import mm
 from collections import defaultdict
-
+import csv
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
@@ -1498,6 +1498,57 @@ def finalize_prereq():
     }
 
     return redirect(url_for("generate_questions"))
+
+# Route to export questions to CSV (review_questions.html)
+@app.route('/export_to_csv')
+def export_to_csv():
+    try:
+        with open("paper.json", "r") as f:
+            paper_json = json.load(f)
+        
+        questions = paper_json.get("questions", [])
+        if not questions:
+            return "Error: No questions available.", 400
+
+        output = io.StringIO()
+        writer = csv.writer(output)
+        
+        # Write header
+        headers = ["Class", "Subject", "Chapter", "Topic", "Subtopic", "Question", "Option 1", "Option 2", "Option 3", "Option 4", "Correct Option", "Verified", "Model Responses"]
+        writer.writerow(headers)
+        
+        # Write question data
+        for q in questions:
+            options = q.get("options", [""] * 4) + [""] * (4 - len(q.get("options", [])))
+            model_responses = "; ".join([f"{k}: {v}" for k, v in q.get("model_responses", {}).items()])
+            row = [
+                q.get("class", ""),
+                q.get("subject", ""),
+                q.get("chapter", ""),
+                q.get("topic", ""),
+                q.get("subtopic", "") or "",
+                q.get("question", ""),
+                options[0],
+                options[1],
+                options[2],
+                options[3],
+                str(q.get("correct_option", "")),
+                str(q.get("verified", "")),
+                model_responses
+            ]
+            writer.writerow(row)
+        
+        output.seek(0)
+        return send_file(
+            io.BytesIO(output.getvalue().encode('utf-8')),
+            as_attachment=True,
+            download_name="Questions.csv",
+            mimetype="text/csv"
+        )
+    except FileNotFoundError:
+        return "Error: Question data not found.", 404
+    except Exception as e:
+        return f"Error: {str(e)}", 500
 
 if __name__ == '__main__':
     app.run(debug=True)
