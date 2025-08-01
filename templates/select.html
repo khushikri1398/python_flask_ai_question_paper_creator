@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Select Topics</title>
+    <title>Select Topics and Content Types</title>
     <script src="https://cdn.tailwindcss.com"></script>
   </head>
   <body class="bg-gray-100 min-h-screen p-6">
@@ -14,14 +14,45 @@
       </div>
 
       <h1 class="text-2xl font-bold mb-6 text-center text-gray-800">
-        Select Topics for Question Generation
+        Select Topics and Content Types for Generation
       </h1>
+
+      {% if error_message %}
+      <div class="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-4" role="alert">
+        {{ error_message }}
+      </div>
+      {% endif %}
+      {% if errors %}
+      <div class="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-4" role="alert">
+        <p class="font-bold">Errors encountered:</p>
+        <ul class="list-disc list-inside">
+          {% for error in errors %}
+          <li>
+            {{ error.message }}
+            {% if error.subject %} (Subject: {{ error.subject }}) {% endif %}
+            {% if error.is_json_upload_error %} [Check JSON upload or try different selection] {% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+        <div class="text-center mt-2">
+          <button
+            type="button"
+            onclick="resetForm()"
+            class="bg-gray-600 hover:bg-gray-700 text-white font-semibold px-4 py-2 rounded"
+          >
+            Retry Selection
+          </button>
+        </div>
+      </div>
+      {% endif %}
 
       <form
         id="topicForm"
         method="post"
         action="{{ url_for('generate') }}"
         class="space-y-6"
+        enctype="multipart/form-data"
+        onsubmit="return validateForm(event)"
       >
         <input type="hidden" name="board" value="{{ board }}" />
         <input type="hidden" name="class" value="{{ class_name }}" />
@@ -40,21 +71,30 @@
           </button>
         </div>
 
+        {% if not subject_chapter_map %}
+        <div class="text-center text-red-600">
+          No chapters available. Please try a different selection.
+          <div class="mt-4">
+            <a href="{{ url_for('index') }}" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 rounded">
+              Back to Home
+            </a>
+          </div>
+        </div>
+        {% else %}
         {% for subject, chapters in subject_chapter_map.items() %}
         <div>
-          <h2 class="text-xl font-semibold text-blue-800 mb-4">
-            {{ subject }}
-          </h2>
+          <h2 class="text-xl font-semibold text-blue-800 mb-4">{{ subject }}</h2>
           {% for chapter in chapters %}
           <div class="border p-4 rounded mb-4 bg-gray-50">
-            <label
-              class="text-lg font-semibold text-gray-800 flex items-center"
-            >
+            <label class="text-lg font-semibold text-gray-800 flex items-center">
               <input
                 type="checkbox"
                 name="chapters"
-                value="{{ chapter.chapter }}"
+                value="{{ chapter.chapter }}|{{ class_name }}|{{ subject }}"
                 class="mr-2"
+                {% if chapter.chapter in selected_chapters %}checked{% endif %}
+                onchange="toggleContentTypes()"
+                aria-label="Select chapter {{ chapter.chapter }}"
               />
               {{ chapter.number }}. {{ chapter.chapter }}
             </label>
@@ -62,54 +102,117 @@
           {% endfor %}
         </div>
         {% endfor %}
+        {% endif %}
+        
+        <!-- Content Types Selection -->
+        <div id="contentTypesSection" class="hidden mt-6 border-t pt-6">
+          <h2 class="text-xl font-semibold text-blue-800 mb-4">Select Content Types (for Study Material)</h2>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {% for content_type in ['Chapter Summaries', 'Important Points', 'Definition Bank', 'Formula Sheet', 'Concept Explanation', 'Solved Examples', 'Practice Questions', 'Quiz Creation', 'Fill in the Blanks', 'True/False', 'Higher Order Thinking (HOTS)', 'Real Life Applications'] %}
+            <label class="flex items-center">
+              <input
+                type="checkbox"
+                name="content_types"
+                value="{{ content_type }}"
+                class="mr-2"
+                aria-label="Select {{ content_type }}"
+              />
+              {{ content_type }}
+            </label>
+            {% endfor %}
+          </div>
+        </div>
 
-        <div class="text-center mt-6 flex gap-4">
-          <!-- New Button -->
+        <div class="text-center mt-6 flex gap-4 justify-center">
+          <!-- Loading Indicator -->
+          <div id="loading" class="hidden text-center text-gray-600 mb-4 w-full">
+            Generating... Please wait.
+          </div>
+
+          <!-- Button for Direct Question Generation -->
           <button
             type="button"
             onclick="submitToNoPrereqRoute()"
-            class="bg-purple-600 hover:bg-purple-700 text-white font-semibold px-6 py-2 rounded w-full"
+            class="bg-purple-600 hover:bg-purple-700 text-white font-semibold px-6 py-2 rounded w-full max-w-xs"
           >
             Generate Questions Without Prerequisites
           </button>
 
-          <!-- Existing Button -->
+          <!-- Button for Prerequisite-Based Question Generation -->
           <button
             type="submit"
             id="submitBtn"
-            class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-2 rounded w-full"
+            class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-2 rounded w-full max-w-xs"
           >
             See Pre-requisites and Generate Questions
+          </button>
+
+          <!-- Button for Study Material Generation -->
+          <button
+            type="button"
+            onclick="submitToStudyMaterialRoute()"
+            class="bg-teal-600 hover:bg-teal-700 text-white font-semibold px-6 py-2 rounded w-full max-w-xs"
+          >
+            Create Study Material for Selected Chapters
           </button>
         </div>
       </form>
     </div>
 
     <script>
-      document
-        .getElementById("topicForm")
-        .addEventListener("submit", function (e) {
-          const prereq = document.getElementById("prerequisite");
-          const stepInput = document.getElementById("stepInput");
+      function validateForm(event) {
+        const checkboxes = document.querySelectorAll('input[name="chapters"]:checked');
+        const contentTypeCheckboxes = document.querySelectorAll('input[name="content_types"]:checked');
+        const form = document.getElementById("topicForm");
+        const isStudyMaterial = form.action.includes("generate_study_material");
 
-          if (prereq && prereq.checked) {
-            if (stepInput.value === "topics") {
-              // Let it submit
-            } else if (stepInput.value === "questions") {
-              // Proceed
-            }
-          }
-        });
+        if (checkboxes.length === 0) {
+          alert('Please select at least one chapter.');
+          return false;
+        }
+
+        if (isStudyMaterial && contentTypeCheckboxes.length === 0) {
+          alert('Please select at least one content type for study material generation.');
+          return false;
+        }
+
+        document.getElementById('loading').classList.remove('hidden');
+        return true;
+      }
 
       function selectAllChapters() {
         const checkboxes = document.querySelectorAll('input[type="checkbox"][name="chapters"]');
         checkboxes.forEach(cb => cb.checked = true);
+        toggleContentTypes();
+      }
+
+      function resetForm() {
+        const form = document.getElementById("topicForm");
+        form.reset();
+        document.getElementById('contentTypesSection').classList.add('hidden');
+        document.getElementById('loading').classList.add('hidden');
+      }
+
+      function toggleContentTypes() {
+        const checkboxes = document.querySelectorAll('input[name="chapters"]:checked');
+        const contentTypesSection = document.getElementById('contentTypesSection');
+        contentTypesSection.classList.toggle('hidden', checkboxes.length === 0);
       }
 
       function submitToNoPrereqRoute() {
         const form = document.getElementById("topicForm");
-        form.action = "{{ url_for('generate_questions_no_prereq') }}"; // Jinja will render actual route
-        form.submit();
+        form.action = "{{ url_for('generate_questions_no_prereq') }}";
+        if (validateForm()) {
+          form.submit();
+        }
+      }
+
+      function submitToStudyMaterialRoute() {
+        const form = document.getElementById("topicForm");
+        form.action = "{{ url_for('generate_study_material') }}";
+        if (validateForm()) {
+          form.submit();
+        }
       }
     </script>
   </body>

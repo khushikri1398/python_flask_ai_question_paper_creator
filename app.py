@@ -14,7 +14,16 @@ from reportlab.lib import colors
 from reportlab.lib.units import mm
 from collections import defaultdict
 import csv
+from datetime import datetime
+import ollama
+from content_generate import fetch_textbooks_list, generate_educational_content, generate_content_with_ollama
+import logging
+from config import TEXTBOOKS_API, DATA_DIR, FONTS_DIR, CONTENT_DIR, TEXT_LIMIT
+from flask import send_from_directory
+import os.path
 
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
 
@@ -300,7 +309,7 @@ def build_prerequisite_tree_minimal(selected_structure):
     return result
 
 def verify_answer_with_models(question_obj):
-    models = ["llama3", "gemma3:1b", "gemma2:2b"]
+    models = ["llama3"]
     responses = []
     model_outputs = {}
 
@@ -523,6 +532,89 @@ def inject_reasons_into_selected_data(selected_data, level):
                     chapter["reason"] = enrichment.get("reason")
                     chapter["for"] = enrichment.get("for")
 
+def generate_study_material_pdf(study_material, output_pdf):
+    try:
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_auto_page_break(auto=True, margin=15)
+        font_path = os.path.join("fonts", "DejaVuSans.ttf")
+        bold_font_path = os.path.join("fonts", "DejaVuSans-Bold.ttf")
+        italic_font_path = os.path.join("fonts", "DejaVuSans-Oblique.ttf")
+
+        # Register regular font
+        if not os.path.exists(font_path):
+            logger.warning(f"Font file not found at {font_path}. Falling back to Helvetica.")
+            pdf.set_font("Helvetica", size=12)
+            use_helvetica = True
+        else:
+            pdf.add_font("DejaVu", "", font_path, uni=True)
+            pdf.set_font("DejaVu", size=12)
+            use_helvetica = False
+
+        # Register bold font if available
+        if os.path.exists(bold_font_path):
+            pdf.add_font("DejaVu", "B", bold_font_path, uni=True)
+            has_bold = True
+        else:
+            logger.warning(f"Bold font file not found at {bold_font_path}. Using regular font for bold text.")
+            has_bold = False
+
+        # Register italic font if available
+        if os.path.exists(italic_font_path):
+            pdf.add_font("DejaVu", "I", italic_font_path, uni=True)
+            has_italic = True
+        else:
+            logger.warning(f"Italic font file not found at {italic_font_path}. Using regular font for italic text.")
+            has_italic = False
+
+        # Title
+        if use_helvetica:
+            pdf.set_font("Helvetica", size=14, style="B" if has_bold else "")
+        else:
+            pdf.set_font("DejaVu", size=14, style="B" if has_bold else "")
+        pdf.cell(200, 10, txt="Study Material", ln=1, align='C')
+        pdf.ln(5)
+
+        for subject_data in study_material:
+            # Subject heading
+            if use_helvetica:
+                pdf.set_font("Helvetica", size=14, style="B" if has_bold else "")
+            else:
+                pdf.set_font("DejaVu", size=14, style="B" if has_bold else "")
+            pdf.cell(200, 10, txt=f"Subject: {subject_data['subject']}", ln=1)
+            pdf.ln(2)
+
+            for chapter_data in subject_data['chapters']:
+                # Chapter heading
+                if use_helvetica:
+                    pdf.set_font("Helvetica", size=12, style="B" if has_bold else "")
+                else:
+                    pdf.set_font("DejaVu", size=12, style="B" if has_bold else "")
+                pdf.cell(200, 10, txt=f"Chapter {chapter_data['number']}: {chapter_data['chapter']}", ln=1)
+                pdf.ln(2)
+
+                for content_type, content in chapter_data['content'].items():
+                    if content:
+                        # Content type
+                        if use_helvetica:
+                            pdf.set_font("Helvetica", size=11, style="I" if has_italic else "")
+                        else:
+                            pdf.set_font("DejaVu", size=11, style="I" if has_italic else "")
+                        pdf.cell(200, 10, txt=content_type, ln=1)
+                        # Content text
+                        if use_helvetica:
+                            pdf.set_font("Helvetica", size=10)
+                        else:
+                            pdf.set_font("DejaVu", size=10)
+                        pdf.multi_cell(0, 8, txt=content)
+                        pdf.ln(2)
+                pdf.ln(4)
+
+        pdf.output(output_pdf)
+        logger.info(f"PDF generated successfully at {output_pdf}")
+    except Exception as e:
+        logger.error(f"Error generating PDF: {str(e)}")
+        raise
 # ------------------------------- Routes ----------------------------------
 
 # 1. Home route to display textbooks (index.html)
@@ -538,19 +630,35 @@ def index():
     return render_template('index.html', textbooks=textbooks, textbooks_json=json.dumps(textbooks))
 
 # 2. Route to handle main selection (select.html)
+# 2. Route to handle main selection (select.html)
 @app.route('/select', methods=['POST'])
 def select():
     board = request.form.get("board")
     class_name = request.form.get("class")
     subjects = request.form.getlist("subject")
+    errors = []  # Added to collect and display errors in the template
 
-    try:
-        response = requests.get(TEXTBOOKS_API)
-        response.raise_for_status()
-        textbooks = response.json().get('data', {}).get('getBooks', [])
-    except requests.RequestException as e:
-        print(f"Error fetching textbooks: {e}")
-        textbooks = []
+    # Normalize inputs
+    normalized_class = normalize_class(class_name)
+    normalized_subjects = [normalize_subject(subject) for subject in subjects]
+    logger.info(f"Normalized inputs: board={board}, class={normalized_class}, subjects={normalized_subjects}")
+
+    # Fetch textbook data with caching and fallback
+    textbooks = fetch_textbooks_list(TEXTBOOKS_API)
+    if not textbooks or not textbooks.get('data', {}).get('getBooks', []):
+        logger.warning("API returned no textbooks, trying cache")
+        textbooks = load_cached_textbooks()
+        if not textbooks:
+            logger.warning("No cached textbooks, using fallback")
+            textbooks = FALLBACK_TEXTBOOKS
+            errors.append({
+                'message': 'Failed to fetch textbooks from API and cache; using fallback data',
+                'is_json_upload_error': False
+            })
+
+    # Cache textbooks if newly fetched
+    if textbooks and textbooks != load_cached_textbooks():
+        save_cached_textbooks(textbooks)
 
     subject_chapter_map = {}
     chapter_number_to_name_map = {}
@@ -560,15 +668,17 @@ def select():
         match = re.match(r"^([\d\.]+)", text.strip())
         return match.group(1) if match else None
 
-    for subject in subjects:
+    for subject in normalized_subjects:
         matching_book = next(
-            (book for book in textbooks
-             if book.get('board') == board and str(book.get('class')) == class_name and book.get('subject') == subject),
+            (book for book in textbooks.get('data', {}).get('getBooks', [])
+             if book.get('board') == board and str(book.get('class')) == normalized_class and normalize_subject(book.get('subject')) == subject),
             None
         )
 
         if not matching_book:
-            print(f"No matching textbook found for subject: {subject}")
+            error_msg = f"No matching textbook found for subject: {subject}, class: {normalized_class}, board: {board}"
+            errors.append({'message': error_msg, 'is_json_upload_error': False, 'subject': subject})
+            logger.warning(error_msg)
             continue
 
         book_id = matching_book.get("id")
@@ -577,13 +687,24 @@ def select():
             response.raise_for_status()
             data = response.json()
         except requests.RequestException as e:
-            print(f"Error fetching page attributes for {subject}: {e}")
+            error_msg = f"Error fetching page attributes for {subject}: {e}"
+            errors.append({'message': error_msg, 'is_json_upload_error': False, 'subject': subject})
+            logger.error(error_msg)
             continue
 
-        # Separate and sort by order
-        chapters = sorted([item for item in data if item.get("type") == "chapter"], key=lambda x: x.get('order', 0))
-        topics = sorted([item for item in data if item.get("type") == "topic"], key=lambda x: x.get('order', 0))
-        subtopics = sorted([item for item in data if item.get("type") == "subtopic"], key=lambda x: x.get('order', 0))
+        # Separate and sort by order, with fallback for missing 'order'
+        chapters = sorted(
+            [item for item in data if item.get("type") == "chapter"],
+            key=lambda x: x.get('order', float('inf'))
+        )
+        topics = sorted(
+            [item for item in data if item.get("type") == "topic"],
+            key=lambda x: x.get('order', float('inf'))
+        )
+        subtopics = sorted(
+            [item for item in data if item.get("type") == "subtopic"],
+            key=lambda x: x.get('order', float('inf'))
+        )
 
         # Map prefixes to clean data
         topic_prefix_map = {
@@ -621,22 +742,31 @@ def select():
                     })
 
             chapter_name = ch.get("text", "")
-            final_chapters.append({
-                "chapter": chapter_name,
-                "number": idx,
-                "topics": [
-                    {
-                        "topic": t["text"],
-                        "subtopics": t["subtopics"]
-                    } for t in chapter_topics
-                ]
+            if chapter_name:  # Only include chapters with a name
+                final_chapters.append({
+                    "chapter": chapter_name,
+                    "number": idx,
+                    "topics": [
+                        {
+                            "topic": t["text"],
+                            "subtopics": t["subtopics"]
+                        } for t in chapter_topics
+                    ]
+                })
+
+                # Map chapter number to name
+                chapter_number_name_map[idx] = chapter_name
+
+        if final_chapters:  # Only add subject if chapters are found
+            subject_chapter_map[subject] = final_chapters
+            chapter_number_to_name_map[subject] = chapter_number_name_map
+        else:
+            errors.append({
+                'message': f"No valid chapters found for {subject} in class {normalized_class}",
+                'is_json_upload_error': False,
+                'subject': subject
             })
-
-            # Map chapter number to name
-            chapter_number_name_map[idx] = chapter_name
-
-        subject_chapter_map[subject] = final_chapters
-        chapter_number_to_name_map[subject] = chapter_number_name_map
+            logger.warning(f"No valid chapters found for {subject}")
 
     # Create folder if it doesn't exist
     output_folder = "structured_data"
@@ -647,7 +777,6 @@ def select():
     with open(output_path, "w") as f:
         json.dump(subject_chapter_map, f, indent=4)
 
-
     # Store only chapter number-name map in session
     session['chapter_number_to_name_map'] = chapter_number_to_name_map
 
@@ -655,37 +784,116 @@ def select():
                            board=board,
                            class_name=class_name,
                            subjects=subjects,
-                           subject_chapter_map=subject_chapter_map)
+                           subject_chapter_map=subject_chapter_map,
+                           errors=errors)  # Pass errors to template
 
 # 2.1 Route to handle topic selection for direct question generation (show_selected_chapters.html)
 @app.route('/generate_questions_no_prereq', methods=['POST'])
 def generate_questions_no_prereq():
     selected_chapters = request.form.getlist('chapters')
     class_name = request.form.get("class")
-    subjects = request.form.getlist("subject")  # allows multiple subjects if needed
+    subjects = request.form.getlist("subject")
+    errors = []  # Added to collect and display errors in the template
 
-    # Path to the JSON file
+    # Normalize inputs
+    normalized_class = normalize_class(class_name)
+    normalized_subjects = [normalize_subject(subject) for subject in subjects]
+    logger.info(f"Normalized inputs: class={normalized_class}, subjects={normalized_subjects}, selected_chapters={selected_chapters}")
+
+    # Parse selected_chapters to extract chapter names
+    parsed_chapters = []
+    for ch in selected_chapters:
+        parts = ch.split('|')
+        if len(parts) == 3:
+            chapter_name, _, subject = parts
+            parsed_chapters.append((normalize_subject(subject), chapter_name))
+        else:
+            errors.append({
+                'message': f"Invalid chapter format: {ch}",
+                'is_json_upload_error': False,
+                'subject': None
+            })
+            logger.warning(f"Invalid chapter format: {ch}")
+
+    # Load chapter data
     json_path = os.path.join('structured_data', 'list_of_all_chapters_for_selected_class.json')
-    
-    with open(json_path, 'r', encoding='utf-8') as f:
-        data = json.load(f)
+    if not os.path.exists(json_path):
+        errors.append({
+            'message': 'No chapter data available. Please select subjects and chapters again.',
+            'is_json_upload_error': False,
+            'subject': None
+        })
+        logger.error(f"Chapter data file not found: {json_path}")
+        return render_template(
+            'show_selected_chapters.html',
+            subject_chapter_map={},
+            class_name=class_name,
+            errors=errors
+        )
 
-    # Build nested dict: { subject: [chapters...] }
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except Exception as e:
+        errors.append({
+            'message': f"Error loading chapter data: {str(e)}",
+            'is_json_upload_error': False,
+            'subject': None
+        })
+        logger.error(f"Error loading {json_path}: {str(e)}")
+        return render_template(
+            'show_selected_chapters.html',
+            subject_chapter_map={},
+            class_name=class_name,
+            errors=errors
+        )
+
+    # Build subject_chapter_map with topics and subtopics
     subject_chapter_map = {}
-    for subject in subjects:
+    for subject in normalized_subjects:
         subject_data = data.get(subject, [])
+        if not subject_data:
+            errors.append({
+                'message': f"No chapters found for subject: {subject}",
+                'is_json_upload_error': False,
+                'subject': subject
+            })
+            logger.warning(f"No chapters found for subject: {subject}")
+            continue
+
         filtered_chapters = [
-            chapter for chapter in subject_data if chapter["chapter"] in selected_chapters
+            chapter for chapter in subject_data
+            if any(s == subject and c == chapter['chapter'] for s, c in parsed_chapters)
         ]
+        for chapter in filtered_chapters:
+            # Ensure topics and subtopics are present
+            if 'topics' not in chapter:
+                chapter['topics'] = []
+                logger.warning(f"No topics found for chapter {chapter['chapter']} in {subject}")
+            for topic in chapter['topics']:
+                if 'subtopics' not in topic:
+                    topic['subtopics'] = []
+                # Ensure topic has a 'topic' key (rename 'text' to 'topic' for consistency)
+                if 'text' in topic and 'topic' not in topic:
+                    topic['topic'] = topic['text']
+
         if filtered_chapters:
             subject_chapter_map[subject] = filtered_chapters
-            
-    print(f"{subject_chapter_map}")
+        else:
+            errors.append({
+                'message': f"No selected chapters found for subject: {subject}",
+                'is_json_upload_error': False,
+                'subject': subject
+            })
+            logger.warning(f"No selected chapters found for subject: {subject}")
+
+    logger.debug(f"subject_chapter_map: {json.dumps(subject_chapter_map, indent=2)}")
 
     return render_template(
         'show_selected_chapters.html',
         subject_chapter_map=subject_chapter_map,
-        class_name=class_name
+        class_name=class_name,
+        errors=errors
     )
 
 # 2.1.1 Route to handle topic selection for direct question generation (show_selected_chapters.html)
@@ -1549,6 +1757,263 @@ def export_to_csv():
         return "Error: Question data not found.", 404
     except Exception as e:
         return f"Error: {str(e)}", 500
+
+def normalize_subject(subject):
+    subject = subject.strip().lower()
+    subject_map = {
+        'maths': 'Mathematics',
+        'mathematics': 'Mathematics',
+        'math': 'Mathematics',
+        'science': 'Science',
+        'physics': 'Physics',
+        'chemistry': 'Chemistry',
+        'biology': 'Biology',
+        'english': 'English',
+        'english language': 'English',
+        'english language and literature': 'English',
+        'english core': 'English',
+        'english elective': 'English Elective',
+        'first flight': 'English',
+        'footprints without feet': 'English',
+        'social science': 'Social Science',
+        'social studies': 'Social Science',
+        'hindi': 'Hindi',
+    }
+    return subject_map.get(subject, subject.capitalize())
+
+def normalize_class(class_name):
+    class_name = str(class_name).strip().lower().replace('class ', '').replace('grade ', '')
+    class_map = {
+        '10': '10',
+        'class 10': '10',
+        'grade 10': '10',
+        '9': '9',
+        'class 9': '9',
+        'grade 9': '9',
+    }
+    return class_map.get(class_name, class_name)
+
+# Cache
+TEXTBOOK_CACHE = os.path.join(DATA_DIR, 'textbook_cache.json')
+
+def load_cached_textbooks():
+    try:
+        if os.path.exists(TEXTBOOK_CACHE):
+            with open(TEXTBOOK_CACHE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        logger.info(f"No cached textbooks found at {TEXTBOOK_CACHE}")
+        return None
+    except Exception as e:
+        logger.error(f"Failed to load cached textbooks: {e}")
+        return None
+
+def save_cached_textbooks(textbooks):
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(TEXTBOOK_CACHE, 'w', encoding='utf-8') as f:
+            json.dump(textbooks, f, indent=4)
+        logger.info(f"Saved textbook cache to {TEXTBOOK_CACHE}")
+    except Exception as e:
+        logger.error(f"Failed to save textbook cache: {e}")
+
+def fetch_textbooks_list(api_url):
+    try:
+        response = requests.get(api_url, timeout=10)
+        if response.status_code == 200:
+            return response.json()
+        logger.error(f"Failed to fetch textbooks: {response.status_code}")
+        return None
+    except Exception as e:
+        logger.error(f"Exception while fetching textbooks: {e}")
+        return None
+
+# Fallback
+FALLBACK_TEXTBOOKS = {
+    'data': {
+        'getBooks': [
+            {
+                'id': 'ncert_math_10',
+                'class': '10',
+                'subject': 'Mathematics',
+                'board': 'NCERT',
+                's3folder': 'ncert/10thmaths'
+            },
+            {
+                'id': 'ncert_science_10',
+                'class': '10',
+                'subject': 'Science',
+                'board': 'NCERT',
+                's3folder': 'ncert/10thscience'
+            },
+            {
+                'id': 'ncert_english_10',
+                'class': '10',
+                'subject': 'English',
+                'board': 'NCERT',
+                's3folder': 'ncert/10thenglish'
+            },
+            {
+                'id': 'ncert_socialscience_10',
+                'class': '10',
+                'subject': 'Social Science',
+                'board': 'NCERT',
+                's3folder': 'ncert/10thsocialscience'
+            },
+            {
+                'id': 'ncert_hindi_10',
+                'class': '10',
+                'subject': 'Hindi',
+                'board': 'NCERT',
+                's3folder': 'ncert/10thhindi'
+            }
+        ]
+    }
+}
+
+@app.route('/generate_study_material', methods=['POST'])
+def generate_study_material():
+    board = request.form.get('board')
+    class_name = request.form.get('class')
+    subjects = request.form.getlist('subject')
+    selected_chapters = request.form.getlist('chapters')
+    content_types = request.form.getlist('content_types')
+    errors = []
+
+    # Normalize inputs
+    normalized_class = normalize_class(class_name)
+    normalized_subjects = [normalize_subject(subject) for subject in subjects]
+    logger.info(f"Normalized inputs: class={normalized_class}, subjects={normalized_subjects}, chapters={selected_chapters}, content_types={content_types}")
+
+    # Fetch textbook data
+    textbooks = fetch_textbooks_list(TEXTBOOKS_API)
+    if not textbooks or not textbooks.get('data', {}).get('getBooks', []):
+        logger.warning("API returned no textbooks, trying cache")
+        textbooks = load_cached_textbooks()
+        if not textbooks:
+            logger.warning("No cached textbooks, using fallback")
+            textbooks = FALLBACK_TEXTBOOKS
+            errors.append({
+                'message': 'Failed to fetch textbooks from API and cache; using fallback data',
+                'is_json_upload_error': False
+            })
+
+    # Cache textbooks if newly fetched
+    if textbooks and textbooks != load_cached_textbooks():
+        save_cached_textbooks(textbooks)
+
+    available_books = [(book.get('subject'), book.get('class'), book.get('s3folder')) for book in textbooks.get('data', {}).get('getBooks', [])]
+    logger.debug(f"Available books: {json.dumps(available_books, indent=2)}")
+
+    study_material = []
+    pdf_code = None
+    pdf_filename = None
+    chapter_number_to_name_map = session.get('chapter_number_to_name_map', {})
+
+    # Load chapter data from stored subject_chapter_map
+    chapters_data_path = os.path.join("structured_data", "list_of_all_chapters_for_selected_class.json")
+    if not os.path.exists(chapters_data_path):
+        errors.append({'message': 'No chapter data available. Please select subjects and chapters again.', 'is_json_upload_error': False})
+        return render_template("study_material.html", study_material=study_material,
+                              pdf_code=pdf_code, pdf_filename=pdf_filename,
+                              errors=errors, board=board, class_name=class_name,
+                              subjects=subjects)
+
+    with open(chapters_data_path, 'r', encoding='utf-8') as f:
+        subject_chapter_map = json.load(f)
+
+    for subject in normalized_subjects:
+        subject_data = {"subject": subject, "chapters": []}
+        chapters = subject_chapter_map.get(subject, [])
+        selected_subject_chapters = [ch.split("|")[0] for ch in selected_chapters if ch.split("|")[2].lower() == subject.lower()]
+        
+        if not chapters:
+            available_subjects = sorted(set(b[0] for b in available_books if normalize_class(b[1]) == normalized_class))
+            error_msg = (f"No book found for {subject} in class {normalized_class} (normalized: {subject}/{normalized_class}). "
+                         f"Available subjects for class {normalized_class}: {', '.join(available_subjects) or 'None'}")
+            errors.append({'message': error_msg, 'is_json_upload_error': True, 'subject': subject})
+            logger.error(error_msg)
+            continue
+
+        for chapter_name in selected_subject_chapters:
+            chapter = next((ch for ch in chapters if ch['chapter'].lower() == chapter_name.lower()), None)
+            if not chapter:
+                errors.append({
+                    'message': f"Chapter {chapter_name} not found for {subject}",
+                    'is_json_upload_error': False,
+                    'subject': subject
+                })
+                logger.warning(f"Chapter {chapter_name} not found in subject_chapter_map for {subject}")
+                continue
+
+            chapter_num = chapter['number']
+            chapter_data = {
+                "number": chapter_num,
+                "chapter": chapter_name,
+                "content": {}
+            }
+
+            logger.info(f"Generating content for {subject} - {chapter_name} (number: {chapter_num})")
+            output_paths, gen_errors = generate_educational_content(
+                board=board,
+                class_name=class_name,
+                subject=subject,
+                chapter_number=int(chapter_num),
+                chapter_name=chapter_name,
+                content_types=content_types
+            )
+            
+            if gen_errors:
+                errors.append({
+                    'message': f"Errors generating content for {subject} - {chapter_name}: {gen_errors}",
+                    'is_json_upload_error': False,
+                    'subject': subject
+                })
+                logger.error(f"Errors generating content for {subject} - {chapter_name}: {gen_errors}")
+            
+            for output_path in output_paths:
+                with open(output_path, 'r', encoding='utf-8') as f:
+                    content_data = json.load(f)
+                    content_type = content_data.get('content_type')
+                    generated_content = content_data.get('generated_content', {}).get(content_type, 'No content generated')
+                    chapter_data['content'][content_type] = generated_content
+                    logger.info(f"Loaded {content_type} from {output_path}: {generated_content[:100]}...")
+
+            if chapter_data['content']:
+                subject_data['chapters'].append(chapter_data)
+
+        if subject_data['chapters']:
+            study_material.append(subject_data)
+
+    if study_material and not errors:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        pdf_filename = f"study_material_{timestamp}.pdf"
+        pdf_path = os.path.join(CONTENT_DIR, pdf_filename)
+        try:
+            generate_study_material_pdf(study_material, pdf_path)
+            pdf_code = f"Study Material PDF generated successfully as {pdf_filename}"
+        except Exception as e:
+            errors.append({'message': f"Failed to generate PDF: {str(e)}", 'is_json_upload_error': False})
+            logger.error(f"Failed to generate PDF: {str(e)}")
+
+    if not study_material and not errors:
+        errors.append({'message': 'No study material generated. Please check your selections or upload valid JSON files.', 'is_json_upload_error': True})
+
+    return render_template("study_material.html", study_material=study_material,
+                           pdf_code=pdf_code, pdf_filename=pdf_filename,
+                           errors=errors, board=board, class_name=class_name,
+                           subjects=subjects)
+
+@app.route('/download_study_material/<filename>')
+def download_study_material(filename):
+    try:
+        return send_from_directory(CONTENT_DIR, filename, as_attachment=True)
+    except FileNotFoundError:
+        logger.error(f"PDF file {filename} not found")
+        return render_template("study_material.html", errors=[{
+            'message': f"PDF file {filename} not found",
+            'is_json_upload_error': False
+        }])
+    
 
 if __name__ == '__main__':
     app.run(debug=True)
