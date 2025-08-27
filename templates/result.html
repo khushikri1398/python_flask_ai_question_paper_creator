@@ -16,9 +16,13 @@
                 <pre class="bg-gray-100 p-4 rounded text-sm">{{ pdf_code }}</pre>
             </div>
 
-            <div class="text-center">
-                <a href="{{ url_for('download_pdf') }}" class="inline-block bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-2 rounded mb-4">
+
+            <div class="text-center space-y-2">
+                <a href="{{ url_for('download_pdf') }}" class="inline-block bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-2 rounded mb-1">
                     Download Question Paper PDF
+                </a>
+                <a href="{{ url_for('download_docx') }}" class="inline-block bg-green-600 hover:bg-green-700 text-white font-semibold px-6 py-2 rounded mb-1">
+                    Download Question Paper Word (.docx)
                 </a>
             </div>
 
