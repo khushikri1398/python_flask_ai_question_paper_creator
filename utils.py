@@ -7,6 +7,9 @@ import requests
 from fpdf import FPDF
 from flask import request, render_template
 from reportlab.lib import colors
+from docx import Document
+from docx.shared import Pt
+
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 
@@ -165,6 +168,30 @@ def generate_pdf(data, output_pdf):
         pdf.ln(5)
     pdf.output(output_pdf)
 
+def generate_docx(data, output_docx):
+    """Generate a Word (.docx) file for the question paper."""
+    doc = Document()
+    doc.add_heading('Generated Question Paper', 0)
+    board = data.get('board', 'N/A')
+    class_name = data.get('class', 'N/A')
+    subject = ', '.join(data.get('subject', [])) if isinstance(data.get('subject'), list) else data.get('subject', 'N/A')
+    doc.add_paragraph(f"Board: {board}, Class: {class_name}, Subject: {subject}")
+    doc.add_paragraph("")
+    questions = data.get('questions', [])
+    for idx, q in enumerate(questions, start=1):
+        p = doc.add_paragraph()
+        run = p.add_run(f"{idx}. {q.get('question')}")
+        run.font.size = Pt(12)
+        options = q.get('options', [])
+        for i, opt in enumerate(options, start=1):
+            p = doc.add_paragraph(f"({chr(64+i)}) {opt}", style='List Bullet')
+            p.paragraph_format.left_indent = Pt(24)
+        correct = q.get('correct_option')
+        if correct:
+            correct_text = options[correct-1] if 1 <= correct <= len(options) else "N/A"
+            doc.add_paragraph(f"Correct Answer: {correct_text}")
+        doc.add_paragraph("")
+    doc.save(output_docx)
 def generate_prerequisite_pdf(tree):
     buffer = io.BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)

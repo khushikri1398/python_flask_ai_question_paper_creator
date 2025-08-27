@@ -148,6 +148,44 @@
 
         <div class="space-y-2 pt-4">
           <h4 class="text-md font-semibold text-gray-700 border-b pb-1">
+            Select Model
+          </h4>
+          <div class="space-y-2">
+            <label class="inline-flex items-center gap-2">
+              <input
+                type="checkbox"
+                name="model_selection"
+                value="llama3"
+                form="topicForm"
+                class="h-4 w-4"
+              />
+              <span class="text-sm text-gray-800">LLaMA 3</span>
+            </label>
+            <label class="inline-flex items-center gap-2">
+              <input
+                type="checkbox"
+                name="model_selection"
+                value="gemma3:1b"
+                form="topicForm"
+                class="h-4 w-4"
+              />
+              <span class="text-sm text-gray-800">Gemma 3:1B</span>
+            </label>
+            <label class="inline-flex items-center gap-2">
+              <input
+                type="checkbox"
+                name="model_selection"
+                value="gemma2:2b"
+                form="topicForm"
+                class="h-4 w-4"
+              />
+              <span class="text-sm text-gray-800">Gemma 2:2B</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="space-y-2 pt-4">
+          <h4 class="text-md font-semibold text-gray-700 border-b pb-1">
             Selection Memory
           </h4>
           <button
