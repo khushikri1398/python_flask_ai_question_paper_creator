@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Select Topic for Worksheet</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 min-h-screen p-6">
+    <div class="max-w-4xl mx-auto bg-white rounded-lg shadow-md p-8">
+        <h1 class="text-2xl font-bold mb-6 text-center text-gray-800">
+            Select a Topic for Your Worksheet
+        </h1>
+        <p class="text-center text-gray-600 mb-8">Choose one topic or subtopic from your selected chapters to generate the "Fill in the Blanks" worksheet.</p>
+
+        <form action="{{ url_for('run_fib_generation') }}" method="post" onsubmit="return validateSelection()">
+            <div class="space-y-8">
+                {% for subject, chapters in selected_data.items() %}
+                <div>
+                    <h2 class="text-xl font-semibold text-blue-800 mb-4 border-b pb-2">{{ subject }}</h2>
+                    {% for chapter in chapters %}
+                    <div class="mb-6">
+                        <h3 class="text-lg font-semibold text-gray-700 mb-3">{{ chapter.chapter }}</h3>
+                        <div class="space-y-2 pl-4">
+                            {% for topic in chapter.topics %}
+                                {% if topic.subtopics %}
+                                    {% for subtopic in topic.subtopics %}
+                                    <label class="flex items-center p-2 rounded-md hover:bg-gray-50 cursor-pointer">
+                                        <input type="radio" name="fib_selection" value="{{ subject }}|{{ chapter.chapter }}|{{ topic.topic }}|{{ subtopic.text }}" class="h-4 w-4 text-blue-600 border-gray-300 focus:ring-blue-500">
+                                        <span class="ml-3 text-sm text-gray-600">
+                                            <span class="font-medium text-gray-800">{{ topic.topic }}</span> &rarr; {{ subtopic.text }}
+                                        </span>
+                                    </label>
+                                    {% endfor %}
+                                {% else %}
+                                    <label class="flex items-center p-2 rounded-md hover:bg-gray-50 cursor-pointer">
+                                        <input type="radio" name="fib_selection" value="{{ subject }}|{{ chapter.chapter }}|{{ topic.topic }}|{{ topic.topic }}" class="h-4 w-4 text-blue-600 border-gray-300 focus:ring-blue-500">
+                                        <span class="ml-3 text-sm font-medium text-gray-800">{{ topic.topic }}</span>
+                                    </label>
+                                {% endif %}
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endfor %}
+            </div>
+
+            <div class="mt-8 border-t pt-6 text-center">
+                <button type="submit" class="bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-8 rounded-lg transition">
+                    Generate Worksheet
+                </button>
+            </div>
+        </form>
+    </div>
+    <script>
+        function validateSelection() {
+            const selection = document.querySelector('input[name="fib_selection"]:checked');
+            if (!selection) {
+                alert('Please select a topic or subtopic to continue.');
+                return false;
+            }
+            return true;
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SVG Generation Results</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <style>
+        .svg-preview {
+            width: 150px;
+            height: 100px;
+            border: 1px solid #dee2e6;
+            border-radius: .25rem;
+            padding: .5rem;
+            background-color: #f8f9fa;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .svg-preview svg {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+        .list-group-item-action {
+            display: flex;
+            align-items: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="container mt-5">
+        <h1>SVG Generation Complete! ✅</h1>
+        <p>Below are the topics processed from your selected chapters. Click on any topic to view the full diagram and its AI-powered explanation.</p>
+        
+        {% if items %}
+            <div class="list-group">
+                {% for item in items %}
+                    <a href="{{ url_for('view_svg', topic=item.topic) }}" class="list-group-item list-group-item-action">
+                        <div class="svg-preview mr-4">
+                            {{ item.svg_data | safe }}
+                        </div>
+                        <span class="font-weight-bold">{{ item.topic|title }}</span>
+                    </a>
+                {% endfor %}
+            </div>
+        {% else %}
+            <div class="alert alert-warning" role="alert">
+                No SVGs were processed. This could be because no topics were found in the selected chapters or an error occurred. Please check the application logs.
+            </div>
+        {% endif %}
+        
+        <div class="mt-4">
+            <a href="{{ url_for('index') }}" class="btn btn-info">Back to Home</a>
+        </div>
+    </div>
+</body>
+</html>

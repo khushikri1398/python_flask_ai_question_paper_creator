@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SVG Generator</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+</head>
+<body>
+    <div class="container mt-5">
+        <div class="jumbotron">
+            <h1 class="display-4">Educational SVG Generator 🖼️</h1>
+            <p class="lead">This tool automatically fetches educational topics, finds relevant SVG diagrams from Wikimedia Commons, enhances them with metadata, and uses an AI to generate detailed explanations.</p>
+            <hr class="my-4">
+            <p>Click the button below to start the process. It may take a few minutes to complete.</p>
+            <form action="{{ url_for('run_svg_generation') }}" method="post" id="generation-form">
+                <button type="submit" class="btn btn-primary btn-lg" id="generate-btn">
+                    Start Generation
+                </button>
+                <div id="loading" class="spinner-border text-primary ml-3" role="status" style="display: none;">
+                    <span class="sr-only">Loading...</span>
+                </div>
+            </form>
+        </div>
+        <a href="{{ url_for('index') }}">&larr; Back to Home</a>
+    </div>
+
+    <script>
+        document.getElementById('generation-form').addEventListener('submit', function() {
+            document.getElementById('generate-btn').disabled = true;
+            document.getElementById('generate-btn').innerText = 'Generating... Please Wait';
+            document.getElementById('loading').style.display = 'inline-block';
+        });
+    </script>
+</body>
+</html>

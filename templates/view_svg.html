@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>View SVG: {{ topic|title }}</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <style>
+        .svg-container {
+            border: 1px solid #ddd;
+            padding: 15px;
+            border-radius: 5px;
+            background-color: #f8f9fa;
+            max-width: 100%;
+            overflow: auto;
+        }
+        .explanation-container {
+            white-space: pre-wrap; /* Allows text to wrap */
+            background-color: #fdfdfd;
+            border-left: 5px solid #007bff;
+            padding: 15px;
+            margin-top: 20px;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <div class="container mt-5">
+        <h1>{{ topic|title }}</h1>
+        <hr>
+        <div class="row">
+            <div class="col-md-6">
+                <h2>SVG Diagram</h2>
+                <div class="svg-container">
+                    {{ svg_content }}
+                </div>
+            </div>
+            <div class="col-md-6">
+                <h2>AI Generated Explanation</h2>
+                <div class="explanation-container">
+                    <code>{{ explanation_content }}</code>
+                </div>
+            </div>
+        </div>
+        <div class="mt-4">
+             <a href="{{ url_for('svg_results') }}" class="btn btn-secondary">&larr; Back to Results</a>
+             <a href="{{ url_for('index') }}" class="btn btn-info">Back to Home</a>
+        </div>
+    </div>
+</body>
+</html>

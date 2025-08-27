@@ -14,7 +14,7 @@
       </div>
 
       <h1 class="text-2xl font-bold mb-6 text-center text-gray-800">
-        Select Topics and Content Types for Generation
+        Select Chapters to Proceed
       </h1>
 
       {% if error_message %}
@@ -123,7 +123,7 @@
           </div>
         </div>
 
-        <div class="text-center mt-6 flex gap-4 justify-center">
+        <div id="action-buttons" class="text-center mt-6 flex flex-wrap gap-4 justify-center">
           <!-- Loading Indicator -->
           <div id="loading" class="hidden text-center text-gray-600 mb-4 w-full">
             Generating... Please wait.
@@ -133,7 +133,7 @@
           <button
             type="button"
             onclick="submitToNoPrereqRoute()"
-            class="bg-purple-600 hover:bg-purple-700 text-white font-semibold px-6 py-2 rounded w-full max-w-xs"
+            class="bg-purple-600 hover:bg-purple-700 text-white font-semibold px-6 py-2 rounded w-full sm:w-auto"
           >
             Generate Questions Without Prerequisites
           </button>
@@ -142,7 +142,7 @@
           <button
             type="submit"
             id="submitBtn"
-            class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-2 rounded w-full max-w-xs"
+            class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-2 rounded w-full sm:w-auto"
           >
             See Pre-requisites and Generate Questions
           </button>
@@ -151,9 +151,27 @@
           <button
             type="button"
             onclick="submitToStudyMaterialRoute()"
-            class="bg-teal-600 hover:bg-teal-700 text-white font-semibold px-6 py-2 rounded w-full max-w-xs"
+            class="bg-teal-600 hover:bg-teal-700 text-white font-semibold px-6 py-2 rounded w-full sm:w-auto"
           >
-            Create Study Material for Selected Chapters
+            Create Study Material
+          </button>
+
+          <!-- Button for SVG Generation -->
+          <button
+            type="button"
+            onclick="submitToSvgRoute()"
+            class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold px-6 py-2 rounded w-full sm:w-auto"
+          >
+            Generate SVG Diagrams
+          </button>
+          
+          <!-- Button for FIB Worksheet Generation -->
+          <button
+            type="button"
+            onclick="submitToFibRoute()"
+            class="bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-3 px-6 rounded-lg transition w-full sm:w-auto text-center"
+          >
+            Create FIB Worksheet
           </button>
         </div>
       </form>
@@ -162,20 +180,14 @@
     <script>
       function validateForm(event) {
         const checkboxes = document.querySelectorAll('input[name="chapters"]:checked');
-        const contentTypeCheckboxes = document.querySelectorAll('input[name="content_types"]:checked');
-        const form = document.getElementById("topicForm");
-        const isStudyMaterial = form.action.includes("generate_study_material");
-
         if (checkboxes.length === 0) {
           alert('Please select at least one chapter.');
+          // Check if event is passed to prevent submission
+          if(event) {
+            event.preventDefault();
+          }
           return false;
         }
-
-        if (isStudyMaterial && contentTypeCheckboxes.length === 0) {
-          alert('Please select at least one content type for study material generation.');
-          return false;
-        }
-
         document.getElementById('loading').classList.remove('hidden');
         return true;
       }
@@ -209,7 +221,31 @@
 
       function submitToStudyMaterialRoute() {
         const form = document.getElementById("topicForm");
+        const contentTypeCheckboxes = document.querySelectorAll('input[name="content_types"]:checked');
         form.action = "{{ url_for('generate_study_material') }}";
+        
+        if (validateForm()) {
+            if (contentTypeCheckboxes.length === 0) {
+                alert('Please select at least one content type for study material generation.');
+                document.getElementById('loading').classList.add('hidden');
+                return;
+            }
+            form.submit();
+        }
+      }
+
+      function submitToSvgRoute() {
+        const form = document.getElementById("topicForm");
+        form.action = "{{ url_for('run_svg_generation_from_chapters') }}";
+        if (validateForm()) {
+          form.submit();
+        }
+      }
+      
+      // THIS FUNCTION WAS MISSING
+      function submitToFibRoute() {
+        const form = document.getElementById("topicForm");
+        form.action = "{{ url_for('select_fib_topics') }}";
         if (validateForm()) {
           form.submit();
         }

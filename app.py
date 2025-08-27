@@ -7,7 +7,8 @@ import subprocess
 import io
 import uuid
 from fpdf import FPDF
-from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for, session
+from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for, session,flash
+from markupsafe import Markup
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
@@ -21,6 +22,28 @@ import logging
 from config import TEXTBOOKS_API, DATA_DIR, FONTS_DIR, CONTENT_DIR, TEXT_LIMIT
 from flask import send_from_directory
 import os.path
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import cm
+from reportlab.lib.utils import ImageReader
+import traceback
+
+
+# Imports for SVG Generation
+import xml.etree.ElementTree as ET
+from time import sleep, time
+from urllib.parse import quote
+from tenacity import retry, stop_after_attempt, wait_exponential
+
+STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static')
+if not os.path.exists(STATIC_DIR):
+    os.makedirs(STATIC_DIR)
+
+TEXTBOOK_CONTENT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'textbook_content')
+if not os.path.exists(TEXTBOOK_CONTENT_DIR):
+    os.makedirs(TEXTBOOK_CONTENT_DIR)
+
+os.makedirs(CONTENT_DIR, exist_ok=True)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -29,6 +52,7 @@ app.secret_key = os.urandom(24)
 
 
 TEXTBOOKS_API = "https://staticapis.pragament.com/textbooks/allbooks.json"
+SVG_DIR = os.path.join("static", "svgs") # Directory to store generated SVGs
 
 SUBJECT_NAME_MAP_BY_CLASS = {
     "Mathematics": {
@@ -42,8 +66,521 @@ SUBJECT_NAME_MAP_BY_CLASS = {
     }
 }
 
+def sanitize_ollama_json(raw_str):
+    """
+    Fixes malformed JSON responses from the Ollama model.
+    - Removes trailing commas
+    - Converts invalid answer objects to lists
+    """
+    # Fix trailing commas before } or ]
+    raw_str = re.sub(r',\s*([\]}])', r'\1', raw_str)
 
-# ------------------------------- Functions -------------------------------
+    # Fix malformed 'answers' objects
+    def fix_answers_block(match):
+        answer_block = match.group(1)
+        tokens = re.findall(r'"([^"]+)"', answer_block)
+        all_items = []
+        for item in tokens:
+            all_items.extend([s.strip() for s in item.split(',')])
+        unique_items = list(dict.fromkeys(filter(None, all_items)))
+        return '"answers": ' + json.dumps(unique_items)
+
+    raw_str = re.sub(r'"answers"\s*:\s*\[({[^}]+})\]', fix_answers_block, raw_str)
+    return raw_str
+
+# ------------------------------- Fill in the Blanks (FIB) Generation Functions -------------------------------
+
+import json
+import logging
+import re
+import ollama
+
+# Setup a logger (if you don't have one already)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+def sanitize_ollama_json(raw_str):
+    # Fix trailing commas before a closing bracket or brace
+    return re.sub(r',\s*([\]}])', r'\1', raw_str)
+
+def generate_fib_content(subject, chapter, topic, subtopic):
+    """
+    Generates Fill-in-the-Blank content with a new constraint for answer length.
+    """
+    # **FIX:** Added a constraint for answer length to the prompt.
+    prompt = f"""
+IMPORTANT: Return only a single valid JSON object. No markdown, no commentary, no explanations.
+
+Subject: "{subject}"
+Chapter: "{chapter}"
+Topic: "{topic}"
+Subtopic: "{subtopic}"
+
+1. Write a 100-150 word paragraph explaining the subtopic.
+2. Select 8 key single-word concepts. **Each word must be 9 letters or fewer.**
+3. Replace them with blanks (_______) in the paragraph.
+4. Create a word bank of the 8 words.
+5. Create 8 fill-in-the-blank questions based on the paragraph.Each sentence should be a statement (not a question) and have one of the keywords replaced by a single '______' placeholder.
+6. Provide the 8 words as answers. **Each answer must be a single word and 9 letters or fewer.**
+
+Return only JSON with these keys:
+- "paragraph"
+- "word_bank"
+- "questions":(This key will contain the list of fill-in-the-blank sentences)
+- "answers"
+"""
+    try:
+        response = ollama.chat(model="llama3", messages=[{"role": "user", "content": prompt}])
+        raw_output = response['message']['content']
+        json_start = raw_output.find('{')
+        json_end = raw_output.rfind('}') + 1
+
+        if json_start == -1 or json_end == 0:
+            return {"error": "The AI model's response did not contain a JSON object."}
+
+        json_str = raw_output[json_start:json_end]
+        cleaned_output = sanitize_ollama_json(json_str)
+        parsed = json.loads(cleaned_output)
+        
+        required_keys = ["paragraph", "word_bank", "questions", "answers"]
+        if all(k in parsed for k in required_keys):
+            return parsed
+        else:
+            return {"error": "The AI-generated JSON is missing required keys."}
+
+    except Exception as e:
+        logger.error(f"Error during FIB generation: {e}")
+        return {"error": "The AI model returned a malformed JSON object that could not be repaired."} 
+
+
+def generate_fib_pdf_v2(content, filename, show_answers=False, marker_path=None):
+    """
+    Generates a Fill-in-the-Blank PDF.
+    - Student version uses a two-column layout with one set of 9 boxes at the rightmost, right-aligned text.
+    - Omits second line if answer is the last word.
+    - Dynamically adjusts question width, no space on right.
+    - Teacher version uses a simple answer list format.
+    - Updated layout: Instructions in a box with border, info boxes in a table with labels, paragraph and answer bank in separate sections, questions with boxes aligned right, footer with centered signatures.
+    """
+    from reportlab.lib.pagesizes import A4
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib import colors
+    from reportlab.lib.units import cm
+    import os
+
+    doc_width, doc_height = A4
+    margin = 2.5 * cm
+    doc = SimpleDocTemplate(filename, pagesize=A4, topMargin=margin, bottomMargin=margin, leftMargin=margin, rightMargin=margin)
+    styles = getSampleStyleSheet()
+
+    # Define custom styles
+    styles.add(ParagraphStyle(name='AnswerKeyTitle', fontSize=14, alignment=1, spaceAfter=12, fontName='Helvetica-Bold'))
+    styles.add(ParagraphStyle(name='SectionHeader', fontSize=10, fontName='Helvetica-Bold', spaceBefore=10, spaceAfter=4))
+    styles.add(ParagraphStyle(name='Instructions', fontSize=8, leading=10))
+    styles.add(ParagraphStyle(name='AnswerBank', fontSize=9, leading=12))
+    styles.add(ParagraphStyle(name='MainParagraph', fontSize=9, leading=11, spaceAfter=12))
+    styles.add(ParagraphStyle(name='QuestionStyle', fontSize=9, leading=12, alignment=0, spaceAfter=2))  # Left-aligned
+    styles.add(ParagraphStyle(name='PostBoxText', fontSize=9, leading=12, alignment=0, leftIndent=0, spaceBefore=0))
+
+    story = []
+    box_style = TableStyle([
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER')
+    ])
+    available_width = doc_width - (2 * margin)
+    box_width = 0.5 * cm
+    num_boxes = 9
+    blank_width = num_boxes * box_width
+
+    # === TEACHER'S ANSWER KEY (Simple List Format) ===
+    if show_answers:
+        story.append(Paragraph("Worksheet & Answer Key", styles['AnswerKeyTitle']))
+        story.append(Paragraph(content.get("paragraph", ""), styles['MainParagraph']))
+        story.append(Paragraph("Word Bank:", styles['SectionHeader']))
+        word_bank_str = ", ".join(content.get("word_bank", []))
+        story.append(Paragraph(word_bank_str, styles['AnswerBank']))
+        story.append(Spacer(1, 1 * cm))
+        story.append(Paragraph("Fill in the blanks:", styles['SectionHeader']))
+        questions = content.get("questions", [])
+        for i, q_text in enumerate(questions):
+            story.append(Paragraph(f"{i+1}. {q_text.replace('______', '___________')}", styles['QuestionStyle']))
+            story.append(Spacer(1, 0.2 * cm))
+        story.append(Spacer(1, 1.5 * cm))
+        story.append(Paragraph("■ Answer Key (for teachers only):", styles['SectionHeader']))
+        answers = content.get("answers", [])
+        for i, ans_text in enumerate(answers):
+            story.append(Paragraph(f"<b>{i+1}.</b> {ans_text}", styles['QuestionStyle']))
+        doc.build(story)
+        return
+
+    # === STUDENT WORKSHEET (Updated Two-Column Layout) ===
+    # 1. Instructions in a bordered box
+    instructions_text = """
+    <b>Instructions for filling the sheet:</b><br/>
+    • Don't fold the sheet. Use only ball pen. Read the given paragraph carefully.<br/>
+    • Below the paragraph, you will find questions with blanks.<br/>
+    • Use the Answer Bank provided to fill in the blanks with the most appropriate word(s).<br/>
+    • Each word/phrase from the Answer Bank can be used only once, unless stated otherwise.<br/>
+    • Write only the correct word(s) in the blank space provided.<br/>
+    • Spelling errors may result in the loss of marks.<br/>
+    • Do not use words that are not in the Answer Bank.<br/>
+    • <b>Only use <i>UPPER CASE CAPITAL LETTER ALPHABETS</i> in the boxes.</b>
+    """
+    instructions_table = Table([[Paragraph(instructions_text, styles['Instructions'])]], colWidths=[available_width], style=TableStyle([
+        ('GRID', (0, 0), (-1, -1), 1, colors.black),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('LEFTPADDING', (0, 0), (-1, -1), 5),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 5)
+    ]))
+    story.append(instructions_table)
+    story.append(Spacer(1, 0.4 * cm))
+
+    # 2. Info Boxes in a table with labels
+    info_table_data = [
+        [Paragraph("<b>Admission number</b>", styles['Instructions']), Table([[''] * 12], colWidths=[0.5 * cm] * 12, rowHeights=0.5 * cm, style=box_style)],
+        [Paragraph("<b>Student Name</b>", styles['Instructions']), Table([[''] * 24], colWidths=[0.5 * cm] * 24, rowHeights=0.5 * cm, style=box_style)],
+        [Paragraph("<b>Class</b>", styles['Instructions']), Table([[''] * 2], colWidths=[0.5 * cm] * 2, rowHeights=0.5 * cm, style=box_style),
+         Paragraph("<b>Section</b>", styles['Instructions']), Table([[''] * 2], colWidths=[0.5 * cm] * 2, rowHeights=0.5 * cm, style=box_style),
+         Paragraph("<b>Date (ddmmyyyy)</b>", styles['Instructions']), Table([[''] * 8], colWidths=[0.5 * cm] * 8, rowHeights=0.5 * cm, style=box_style)]
+    ]
+    info_table = Table(info_table_data, colWidths=[2.5 * cm, 6 * cm, 1 * cm, 1 * cm, 2 * cm, 4 * cm])
+    info_table.setStyle(TableStyle([
+        ('VALIGN', (0, 0), (-1, -1), 'BOTTOM'),
+        ('LEFTPADDING', (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 0)
+    ]))
+    story.append(info_table)
+    story.append(Spacer(1, 0.4 * cm))
+
+    # 3. Paragraph and Answer Bank in separate sections
+    story.append(Paragraph(f"<b>Paragraph:</b> {content.get('paragraph', '')}", styles['MainParagraph']))
+    story.append(Spacer(1, 0.3 * cm))
+    story.append(Paragraph(f"<b>Answer bank:</b> {', '.join(word.upper() for word in content.get('word_bank', []))}", styles['AnswerBank']))
+    story.append(Spacer(1, 0.5 * cm))
+
+    # 4. Questions with Two-Column Layout
+    questions = content.get("questions", [])
+    for i, sentence in enumerate(questions):
+        if '______' in sentence:
+            parts = sentence.split('______', 1)
+            pre_box_text = parts[0].rstrip()
+            post_box_text = parts[1].lstrip() if len(parts) > 1 else ''
+            show_post_box = bool(post_box_text and post_box_text.strip())
+        else:
+            pre_box_text = sentence
+            post_box_text = ''
+            show_post_box = False
+        
+        adjusted_question_width = available_width - blank_width
+        question_para = Paragraph(f"<b>Q{i+1}.</b> {pre_box_text}", styles['QuestionStyle'])
+        blank_table = Table([[''] * num_boxes], colWidths=[box_width] * num_boxes, rowHeights=0.5 * cm, style=box_style)
+        
+        question_data = [[question_para, blank_table]]
+        question_table = Table(question_data, colWidths=[adjusted_question_width, blank_width])
+        question_table.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 0)
+        ]))
+        story.append(question_table)
+        
+        if show_post_box:
+            story.append(Paragraph(post_box_text, styles['PostBoxText']))
+        
+        story.append(Spacer(1, 0.3 * cm))
+
+    # 5. Footer with centered signatures
+    footer_data = [[Paragraph("", styles['Instructions'])],
+                   [Paragraph("Invigilator's Signature: __________________", styles['Instructions'])],
+                   [Paragraph("Student's Signature: ____________________", styles['Instructions'])]]
+    footer_table = Table(footer_data, colWidths=[available_width], style=TableStyle([
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP')
+    ]))
+    story.append(Spacer(1, 1 * cm))
+    story.append(footer_table)
+
+    def draw_corner_markers(canvas, doc):
+        canvas.saveState()
+        if marker_path and os.path.exists(marker_path):
+            from reportlab.lib.utils import ImageReader
+            marker = ImageReader(marker_path)
+            positions = [
+                (0.5 * cm, doc_height - 1.3 * cm),
+                (doc_width - 1.3 * cm, doc_height - 1.3 * cm),
+                (0.5 * cm, 0.5 * cm),
+                (doc_width - 1.3 * cm, 0.5 * cm)
+            ]
+            for x, y in positions:
+                canvas.drawImage(marker, x, y, width=0.8 * cm, height=0.8 * cm, mask='auto')
+        canvas.restoreState()
+
+    doc.build(story, onFirstPage=draw_corner_markers, onLaterPages=draw_corner_markers)
+
+# ------------------------------- SVG Generation Functions (IMPROVED) -------------------------------
+
+# Namespaces
+SVG_NAMESPACE = "http://www.w3.org/2000/svg"
+DC_NAMESPACE = "http://purl.org/dc/elements/1.1/"
+ET.register_namespace('', SVG_NAMESPACE)
+ET.register_namespace('dc', DC_NAMESPACE)
+
+# Rate limiting config
+MAX_RETRIES = 3
+BASE_DELAY = 2  # seconds
+GITHUB_API_DELAY = 1  # seconds between GitHub API requests
+
+def fetch_topics():
+    logger.info("📚 Fetching topics list...")
+    try:
+        api_url = "https://api.github.com/repos/Pragament/json_data/contents/textbooks/page_attributes"
+        response = safe_github_request(api_url)
+        files = [f for f in response.json() if f['name'].endswith('.json')]
+
+        topics = []
+        for file in files[:25]:
+            try:
+                file_response = safe_raw_request(file['download_url'])
+                content = file_response.text.strip()
+                if not content.startswith(('{', '[')):
+                    continue
+                data = json.loads(content)
+                if isinstance(data, dict):
+                    topic = data.get('title') or data.get('name')
+                    if topic:
+                        topics.append(topic)
+                elif isinstance(data, list):
+                    for item in data:
+                        if isinstance(item, dict):
+                            topic = item.get('title') or item.get('name')
+                            if topic:
+                                topics.append(topic)
+            except Exception as e:
+                logger.warning(f"⚠️ File processing error for {file['name']}: {e}")
+            finally:
+                sleep(GITHUB_API_DELAY)
+        if not topics:
+            return get_fallback_topics()
+        return list(dict.fromkeys(topics))[:25]
+    except Exception as e:
+        logger.error(f"⚠️ GitHub processing error: {e}")
+        return get_fallback_topics()
+
+@retry(stop=stop_after_attempt(MAX_RETRIES), wait=wait_exponential(multiplier=1, min=BASE_DELAY))
+def safe_github_request(url):
+    response = requests.get(url)
+    if response.status_code == 403:
+        reset_time = int(response.headers.get('X-RateLimit-Reset', 0)) - int(time())
+        if reset_time > 0:
+            sleep(reset_time)
+            raise Exception("Rate limit hit - retrying after reset")
+    response.raise_for_status()
+    return response
+
+@retry(stop=stop_after_attempt(MAX_RETRIES), wait=wait_exponential(multiplier=1, min=BASE_DELAY))
+def safe_raw_request(url):
+    response = requests.get(url)
+    if response.status_code == 429:
+        sleep(BASE_DELAY * 2)
+        raise Exception("Too Many Requests - retrying")
+    response.raise_for_status()
+    return response
+
+def get_fallback_topics():
+    return [
+        "human anatomy", "world map", "electric circuit", "photosynthesis",
+        "solar system", "periodic table", "human brain", "digestive system",
+        "water cycle", "plant cell", "animal cell", "volcano diagram",
+        "rock cycle", "food pyramid", "muscular system", "skeletal system",
+        "respiratory system", "heart anatomy", "neuron structure",
+        "ecosystem diagram", "climate zones", "tectonic plates",
+        "electromagnetic spectrum", "atomic structure", "mitochondria structure"
+    ]
+
+def search_wikimedia_svg(topic):
+    """
+    Searches Wikimedia for SVGs related to the topic and returns up to 5 results.
+    """
+    params = {
+        "action": "query",
+        "format": "json",
+        "list": "search",
+        "srsearch": f'"{topic}" filetype:svg',
+        "srlimit": 5,  # Fetch top 5 results to increase chances of finding a valid one
+        "srnamespace": 6
+    }
+    try:
+        response = requests.get("https://commons.wikimedia.org/w/api.php", params=params)
+        response.raise_for_status()
+        results = response.json().get("query", {}).get("search", [])
+        return [item["title"] for item in results] if results else []
+    except Exception as e:
+        logger.warning(f"⚠️ Search error for {topic}: {e}")
+        return []
+
+def get_svg_direct_url(file_title):
+    """
+    Gets the direct file URL for an SVG from its title.
+    """
+    params = {
+        "action": "query",
+        "titles": file_title,
+        "prop": "imageinfo",
+        "iiprop": "url",
+        "format": "json"
+    }
+    try:
+        response = requests.get("https://commons.wikimedia.org/w/api.php", params=params)
+        response.raise_for_status()
+        data = response.json()
+        pages = data.get("query", {}).get("pages", {})
+        for page_id in pages:
+            if "imageinfo" in pages[page_id]:
+                return pages[page_id]["imageinfo"][0]["url"]
+    except Exception as e:
+        logger.error(f"Could not get direct URL for {file_title}: {e}")
+    return None
+
+def download_and_validate_svg(file_title, topic):
+    """
+    Downloads an SVG from a direct URL and validates its content.
+    """
+    direct_url = get_svg_direct_url(file_title)
+    if not direct_url:
+        logger.warning(f"Could not resolve direct URL for '{file_title}'. Skipping.")
+        return None
+
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        response = requests.get(direct_url, headers=headers, stream=True, timeout=15)
+        response.raise_for_status()
+        
+        content_type = response.headers.get('Content-Type', '')
+        if 'svg' not in content_type:
+            logger.warning(f"Skipping '{file_title}' due to unexpected content type: {content_type}")
+            return None
+
+        # Read content for validation before writing
+        content_bytes = response.content
+        try:
+            # Try to decode as utf-8, but fall back to latin-1 if it fails
+            content_str = content_bytes.decode('utf-8')
+        except UnicodeDecodeError:
+            content_str = content_bytes.decode('latin-1')
+
+
+        if not content_str.strip().startswith('<svg'):
+            logger.warning(f"Validation failed for '{file_title}'. Content does not start with <svg> tag.")
+            return None
+
+        # If validation passes, write the file
+        os.makedirs(SVG_DIR, exist_ok=True)
+        clean_topic = re.sub(r'\W+', '_', topic.lower())
+        filepath = os.path.join(SVG_DIR, f"{clean_topic}.svg")
+        
+        with open(filepath, "wb") as f:
+            f.write(content_bytes)
+        
+        logger.info(f"✅ Successfully downloaded and validated '{file_title}' for topic '{topic}'.")
+        return filepath
+
+    except requests.RequestException as e:
+        logger.error(f"Download failed for {direct_url}: {e}")
+        return None
+
+def enhance_svg(filepath, topic):
+    try:
+        if not filepath or not os.path.exists(filepath):
+            raise FileNotFoundError("SVG file missing")
+        tree = ET.parse(filepath)
+        root = tree.getroot()
+
+        # Add title element for accessibility
+        title = ET.SubElement(root, "title")
+        title.text = f"Educational Diagram: {topic}"
+
+        # Add frontend-compatible attributes
+        root.set("data-map-type", "educational")
+        root.set("data-zoom-level", "1")
+        root.set("data-topic", topic.lower().replace(" ", "-"))
+
+        # Add metadata section with proper namespaces
+        metadata = ET.SubElement(root, "metadata")
+        dc_title = ET.SubElement(metadata, f"{{{DC_NAMESPACE}}}title")
+        dc_title.text = topic
+        dc_desc = ET.SubElement(metadata, f"{{{DC_NAMESPACE}}}description")
+        dc_desc.text = f"Educational diagram about {topic}"
+
+        tree.write(filepath, xml_declaration=True, encoding="utf-8")
+        return filepath
+    except Exception as e:
+        logger.error(f"⚠️ SVG enhancement failed for {topic}: {e}")
+        return filepath
+
+def generate_ai_explanation(filepath, topic):
+    try:
+        if not filepath or not os.path.exists(filepath):
+            raise FileNotFoundError("SVG file missing")
+        with open(filepath, "r", encoding="utf-8") as f:
+            svg_content = f.read()
+        prompt = f"""Analyze this educational SVG diagram and provide:
+1. Key elements explanation
+2. Real-world applications
+3. Common student misconceptions
+4. Interactive learning suggestions
+
+SVG Content:
+{svg_content}"""
+        response = ollama.chat(
+            model="mistral",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        clean_topic = re.sub(r'\W+', '_', topic.lower())
+        explanation_path = os.path.join(SVG_DIR, f"{clean_topic}_explanation.md")
+        with open(explanation_path, "w", encoding="utf-8") as f:
+            f.write(f"# Educational Guide\n{response['message']['content']}")
+        logger.info(f"📘 Explanation saved: {explanation_path}")
+        return explanation_path
+    except Exception as e:
+        logger.error(f"⚠️ AI explanation failed: {e}")
+        return None
+
+
+def process_topic(topic):
+    """
+    Orchestrates the process of finding, downloading, enhancing, and explaining an SVG for a topic.
+    """
+    logger.info(f"\n🔍 Processing topic: {topic}")
+    
+    # Step 1: Search for multiple potential SVG files
+    file_titles = search_wikimedia_svg(topic)
+    if not file_titles:
+        logger.warning(f"No SVG search results found for '{topic}'.")
+        return None, None
+
+    # Step 2: Iterate through results and try to download the first valid one
+    svg_path = None
+    for title in file_titles:
+        logger.info(f"  Attempting to download and validate: {title}")
+        svg_path = download_and_validate_svg(title, topic)
+        if svg_path:
+            break  # Stop after the first success
+    
+    # Step 3: If no valid SVG was found after trying all results, give up for this topic
+    if not svg_path:
+        logger.error(f"❌ Failed to find a valid SVG for '{topic}' after trying {len(file_titles)} candidates.")
+        return None, None
+
+    # Step 4: Enhance the valid SVG and generate an explanation
+    enhanced_path = enhance_svg(svg_path, topic)
+    explanation_path = generate_ai_explanation(enhanced_path, topic)
+    
+    return enhanced_path, explanation_path
+
+
+# ------------------------------- Original App Functions -------------------------------
 
 def strip_number_prefix(option):
     """Strips a leading number and period (e.g. '1. ') from the option."""
@@ -381,8 +918,7 @@ def verify_answer_with_models(question_obj):
 
 def generate_pdf(data, output_pdf, show_metadata=True):
     from fpdf import FPDF
-    import os
-
+    
     pdf = FPDF()
     pdf.add_page()
     pdf.set_auto_page_break(auto=True, margin=15)
@@ -629,7 +1165,6 @@ def index():
         textbooks = []
     return render_template('index.html', textbooks=textbooks, textbooks_json=json.dumps(textbooks))
 
-# 2. Route to handle main selection (select.html)
 # 2. Route to handle main selection (select.html)
 @app.route('/select', methods=['POST'])
 def select():
@@ -931,17 +1466,9 @@ def generate_questions_directly():
             chapter, topic, subtopic, class_name, subject = parsed
             prepared_data[class_name][subject][chapter]["topics"][topic].append(subtopic)
 
-    # print("🟢 selected_chapters:", request.form.getlist("selected_chapters"))
-    # print("🟢 selected_topics:", request.form.getlist("selected_topics"))
-    # print("🟢 selected_subtopics:", request.form.getlist("selected_subtopics"))
-
-    # print(f"📦 Prepared data structure: {pprint.pformat(prepared_data)}")
-
     final_data = json.loads(json.dumps(prepared_data))
     os.makedirs("structured_data", exist_ok=True)
     
-    # print(f"📦 Final data structure: {pprint.pformat(final_data)}")
-
     with open("structured_data/prepared_selected_data_direct.json", "w") as f:
         json.dump(final_data, f, indent=2)
 
@@ -2013,7 +2540,251 @@ def download_study_material(filename):
             'message': f"PDF file {filename} not found",
             'is_json_upload_error': False
         }])
+
+# ------------------------------- SVG Generator Routes ----------------------------------
+
+@app.route('/svg_generator')
+def svg_generator():
+    """Renders the main page for the SVG generator."""
+    return render_template('svg_generator.html')
+
+@app.route('/run_svg_generation', methods=['POST'])
+def run_svg_generation():
+    """Runs the SVG generation process from a generic list of topics."""
+    logger.info("🚀 Starting Educational SVG Processor")
+    try:
+        topics = fetch_topics()
+        logger.info(f"📋 Loaded {len(topics)} topics for processing")
+        processed_files = []
+        for topic in topics:
+            svg_path, explanation_path = process_topic(topic)
+            if svg_path:
+                processed_files.append({
+                    "topic": topic,
+                    "svg_file": os.path.basename(svg_path),
+                    "explanation_file": os.path.basename(explanation_path) if explanation_path else None
+                })
+            sleep(1)  # Rate limiting
+        session['processed_svgs'] = processed_files
+        return redirect(url_for('svg_results'))
+    except Exception as e:
+        logger.critical(f"🔥 Critical error during SVG generation: {e}")
+        return "An error occurred during SVG generation. Check the logs for details.", 500
+
+@app.route('/run_svg_generation_from_chapters', methods=['POST'])
+def run_svg_generation_from_chapters():
+    """Runs the SVG generation process based on topics from selected chapters."""
+    logger.info("🚀 Starting Educational SVG Processor from selected chapters...")
+    
+    selected_chapters_raw = request.form.getlist('chapters')
+    if not selected_chapters_raw:
+        return "Error: No chapters selected.", 400
+
+    # --- Extract Topics from Selected Chapters ---
+    parsed_chapters = []
+    for ch_raw in selected_chapters_raw:
+        parts = ch_raw.split('|')
+        if len(parts) == 3:
+            parsed_chapters.append({'name': parts[0], 'subject': parts[2]})
+
+    chapters_data_path = os.path.join("structured_data", "list_of_all_chapters_for_selected_class.json")
+    if not os.path.exists(chapters_data_path):
+        return "Error: Chapter data file not found. Please go back and re-select subjects.", 500
+    
+    with open(chapters_data_path, "r", encoding='utf-8') as f:
+        all_chapters_data = json.load(f)
+
+    topics_to_process = set()
+    for selected_ch in parsed_chapters:
+        subject_chapters = all_chapters_data.get(selected_ch['subject'], [])
+        chapter_details = next((ch for ch in subject_chapters if ch.get("chapter") == selected_ch['name']), None)
+        
+        if chapter_details and "topics" in chapter_details:
+            for topic in chapter_details["topics"]:
+                if topic.get("topic"):
+                    topics_to_process.add(re.sub(r'^\d+\.\d+\s*', '', topic["topic"]).strip())
+                if "subtopics" in topic:
+                    for subtopic in topic["subtopics"]:
+                        if subtopic.get("text"):
+                            topics_to_process.add(re.sub(r'^\d+\.\d+\.\d+\s*', '', subtopic["text"]).strip())
+
+    if not topics_to_process:
+        return "No topics found in the selected chapters.", 400
+
+    logger.info(f"📋 Found {len(topics_to_process)} unique topics for processing: {topics_to_process}")
+
+    processed_files = []
+    for topic in list(topics_to_process):
+        svg_path, explanation_path = process_topic(topic)
+        if svg_path:
+            processed_files.append({
+                "topic": topic,
+                "svg_file": os.path.basename(svg_path),
+                "explanation_file": os.path.basename(explanation_path) if explanation_path else None
+            })
+        sleep(1)
+
+    session['processed_svgs'] = processed_files
+    return redirect(url_for('svg_results'))
     
 
+@app.route('/svg_results')
+def svg_results():
+    """Displays the list of generated SVGs with previews."""
+    processed_svgs = session.get('processed_svgs', [])
+    
+    for item in processed_svgs:
+        svg_path = os.path.join(SVG_DIR, item['svg_file'])
+        try:
+            with open(svg_path, 'r', encoding='utf-8') as f:
+                item['svg_data'] = f.read()
+        except Exception as e:
+            logger.error(f"Could not read SVG file {svg_path} for preview: {e}")
+            item['svg_data'] = '<p class="text-red-500">Preview not available</p>'
+
+    return render_template('svg_results.html', items=processed_svgs)
+
+@app.route('/view_svg/<topic>')
+def view_svg(topic):
+    """Displays a single SVG and its explanation."""
+    clean_topic = re.sub(r'\W+', '_', topic.lower())
+    svg_filename = f"{clean_topic}.svg"
+    placeholder_filename = f"{clean_topic}_placeholder.svg"
+    explanation_filename = f"{clean_topic}_explanation.md"
+
+    svg_path = os.path.join(SVG_DIR, svg_filename)
+    placeholder_path = os.path.join(SVG_DIR, placeholder_filename)
+    explanation_path = os.path.join(SVG_DIR, explanation_filename)
+
+    svg_content = ""
+    # Try to read the main SVG, if not found, try the placeholder
+    try:
+        if os.path.exists(svg_path):
+             with open(svg_path, 'r', encoding='utf-8') as f:
+                svg_content = f.read()
+        elif os.path.exists(placeholder_path):
+            with open(placeholder_path, 'r', encoding='utf-8') as f:
+                svg_content = f.read()
+        else:
+            svg_content = "<p>SVG file not found.</p>"
+    except Exception as e:
+        logger.error(f"Error reading SVG file for {topic}: {e}")
+        svg_content = f"<p>Error loading SVG: {e}</p>"
+
+
+    explanation_content = ""
+    try:
+        if os.path.exists(explanation_path):
+            with open(explanation_path, 'r', encoding='utf-8') as f:
+                explanation_content = f.read()
+        else:
+            explanation_content = "No explanation file found."
+    except Exception as e:
+        logger.error(f"Error reading explanation file for {topic}: {e}")
+        explanation_content = f"Error loading explanation: {e}"
+
+    return render_template('view_svg.html', 
+                           topic=topic, 
+                           svg_content=Markup(svg_content), 
+                           explanation_content=explanation_content)
+
+# ------------------------------- NEW FIB Generator Routes ----------------------------------
+
+@app.route('/select_fib_topics', methods=['POST'])
+def select_fib_topics():
+    """
+    This new route takes the selected chapters, finds their topics/subtopics,
+    and renders a new page for the user to make a final selection.
+    """
+    selected_chapters_raw = request.form.getlist('chapters')
+    if not selected_chapters_raw:
+        # CORRECTED: Changed Flask() to flash()
+        flash("You must select at least one chapter to create a worksheet.", "error")
+        return redirect(request.referrer or url_for('index'))
+
+    # Load the detailed chapter data saved in the /select route
+    chapters_data_path = os.path.join(DATA_DIR, "list_of_all_chapters_for_selected_class.json")
+    if not os.path.exists(chapters_data_path):
+        flash("Chapter data not found. Please start the selection process over.", "error")
+        return redirect(url_for('index'))
+    
+    with open(chapters_data_path, "r", encoding='utf-8') as f:
+        all_chapters_data = json.load(f)
+
+    # Filter the data to only include chapters the user selected
+    selected_data = defaultdict(list)
+    for ch_raw in selected_chapters_raw:
+        try:
+            chapter_name, class_name, subject = ch_raw.split('|')
+            subject_chapters = all_chapters_data.get(subject, [])
+            chapter_details = next((ch for ch in subject_chapters if ch.get("chapter") == chapter_name), None)
+            if chapter_details:
+                selected_data[subject].append(chapter_details)
+        except ValueError:
+            continue # Skip any malformed chapter values
+
+    if not selected_data:
+        # CORRECTED: Changed Flask() to flash()
+        flash("Could not find details for the selected chapters. Please try again.", "warning")
+        return redirect(request.referrer)
+
+    return render_template("select_fib_topics.html", selected_data=selected_data)
+
+
+@app.route('/run_fib_generation', methods=['POST'])
+def run_fib_generation():
+    selection = request.form.get('fib_selection')
+    if not selection:
+        flash("You must select a topic/subtopic to generate a worksheet.", "error")
+        return redirect(request.referrer or url_for('index'))
+
+    try:
+        subject, chapter, topic, subtopic = selection.split('|')
+    except ValueError:
+        flash("Invalid selection format. Please try again.", "error")
+        return redirect(request.referrer or url_for('index'))
+
+    logger.info(f"Generating FIB content for: {subject}/{chapter}/{topic}/{subtopic}")
+    content = generate_fib_content(subject, chapter, topic, subtopic)
+
+    if "error" in content:
+        flash(content["error"], "error")
+        return render_template("fib_results.html", success=False)
+
+    base_name = f"FIB_{subject}_{chapter}_{subtopic}".replace(" ", "_").replace("/", "_")
+    student_pdf_name = f"{base_name}_student.pdf"
+    answer_pdf_name = f"{base_name}_answer.pdf"
+
+    student_pdf_path = os.path.join(CONTENT_DIR, student_pdf_name)
+    answer_pdf_path = os.path.join(CONTENT_DIR, answer_pdf_name)
+
+    os.makedirs(CONTENT_DIR, exist_ok=True)
+
+    marker_path = os.path.join(STATIC_DIR, "img1.jpg")
+    if not os.path.exists(marker_path):
+        flash("Marker image not found.", "error")
+        return render_template("fib_results.html", success=False)
+
+    try:
+        generate_fib_pdf_v2(content, student_pdf_path, show_answers=False, marker_path=marker_path)
+        generate_fib_pdf_v2(content, answer_pdf_path, show_answers=True, marker_path=marker_path)
+
+        logger.info("FIB PDF generation complete.")
+        return render_template("fib_results.html", success=True,
+                               student_pdf=student_pdf_name,
+                               answer_pdf=answer_pdf_name)
+    except Exception as e:
+        logger.error(f"Failed to generate PDFs: {e}")
+        flash(f"An error occurred while creating the PDF files: {e}", "error")
+        return render_template("fib_results.html", success=False)
+
+
+
+@app.route('/download_fib/<path:filename>')
+def download_fib(filename):
+    """Serves a generated FIB PDF from the content directory."""
+    return send_from_directory(CONTENT_DIR, filename, as_attachment=True)
+
 if __name__ == '__main__':
+    os.makedirs(SVG_DIR, exist_ok=True)
     app.run(debug=True)
